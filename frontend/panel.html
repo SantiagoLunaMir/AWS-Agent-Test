@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Panel del taller · Demo</title>
+  <link rel="stylesheet" href="css/panel.css">
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>Panel del taller</h1>
+      <p class="sub">Citas creadas por el agente en tiempo real · Taller Pistón (demo)</p>
+    </div>
+    <div class="tools">
+      <button id="anterior" aria-label="Día anterior">‹</button>
+      <input type="date" id="fecha" aria-label="Fecha">
+      <button id="siguiente" aria-label="Día siguiente">›</button>
+      <button id="hoy">Hoy</button>
+      <span class="live off" id="live">● en vivo</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="kpis" id="kpis"></section>
+
+    <section class="card">
+      <h2>Agenda por mecánico</h2>
+      <div class="agenda-wrap"><table class="agenda" id="agenda"></table></div>
+    </section>
+
+    <section class="card">
+      <h2>Citas del día</h2>
+      <div class="tabla-wrap">
+        <table class="tabla">
+          <thead>
+            <tr><th>Hora</th><th>Cita</th><th>Cliente</th><th>Vehículo</th><th>Servicio</th><th>Mecánico</th><th>Estado</th><th></th></tr>
+          </thead>
+          <tbody id="citas"></tbody>
+        </table>
+      </div>
+      <p class="vacio" id="vacio" hidden>No hay citas este día. Agenda una desde el chat.</p>
+    </section>
+  </main>
+
+  <dialog id="clave">
+    <form method="dialog" id="claveForm">
+      <h2>Acceso al panel</h2>
+      <p>Pega la clave del panel (salida <code>PanelKeyCommand</code> del despliegue).</p>
+      <input id="claveInput" type="password" required autocomplete="off">
+      <button type="submit">Entrar</button>
+    </form>
+  </dialog>
+
+  <dialog id="fotoDialog">
+    <form method="dialog">
+      <img id="fotoImg" alt="Foto del vehículo">
+      <p id="fotoInfo"></p>
+      <button type="submit">Cerrar</button>
+    </form>
+  </dialog>
+
+  <script src="js/panel.js" type="module"></script>
+</body>
+</html>

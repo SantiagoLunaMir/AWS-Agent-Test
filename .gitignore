@@ -1,0 +1,27 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# CDK
+infra/cdk.out/
+infra/cdk.context.json
+
+# Configuración local y secretos (nunca al repo)
+frontend/config.json
+.env
+.env.*
+!.env.example
+*credentials*
+*accessKeys*
+*.pem
+
+# Editor / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Salidas del despliegue (contienen URLs de tu cuenta)
+cdk-outputs.json
