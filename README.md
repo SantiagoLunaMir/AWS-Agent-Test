@@ -96,7 +96,7 @@ python -m venv .venv
 pip install -r requirements-dev.txt -r infra/requirements.txt
 cd infra
 npx aws-cdk bootstrap           # solo la primera vez por cuenta y región
-npx aws-cdk deploy
+npx aws-cdk deploy --outputs-file ../cdk-outputs.json
 ```
 
 Al terminar, CDK imprime:
@@ -118,10 +118,13 @@ Ejemplo: `npx aws-cdk deploy -c modelId=us.anthropic.claude-opus-5 -c senderEmai
 ## Pruebas
 
 ```bash
-pytest -q
+pytest -q                               # unitarias: moto + cliente falso de Claude, sin AWS
+python scripts/probar_modelos.py        # qué modelos Claude puede invocar tu cuenta
+python scripts/smoke_test.py            # de punta a punta contra el stack desplegado
+python scripts/smoke_test.py --flujo    # conversación completa hasta agendar una cita
 ```
 
-Las pruebas usan [moto](https://github.com/getmoto/moto) para simular DynamoDB y S3, y un cliente falso de Claude, así que no llaman a AWS.
+> ¿Eres un agente de código o quieres la ruta más corta? Sigue [AGENTS.md](AGENTS.md).
 
 ## Desarrollo local del frontend
 
@@ -148,5 +151,7 @@ npx aws-cdk destroy
 backend/taller/     código de las Lambdas (agente, herramientas, visión, guardrails, skills)
 frontend/           chat estilo mensajería + panel del taller (HTML/CSS/JS sin build)
 infra/              stack de AWS CDK en Python
+scripts/            prueba de humo y detector de modelos disponibles
 tests/              pruebas con pytest + moto
+AGENTS.md           guía rápida para agentes de código (CLAUDE.md la importa)
 ```
