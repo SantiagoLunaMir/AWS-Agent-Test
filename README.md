@@ -30,7 +30,7 @@ flowchart LR
     T -.->|opcional| SES[Amazon SES]
     SCH --> L3[Lambda Recordatorio] --> DDB
     P[Panel del taller] -->|x-panel-key| API
-    L1 --> SM[Secrets Manager<br/>clave del panel]
+    L1 --> SM[SSM Parameter Store<br/>clave del panel]
 ```
 
 | Pieza | Servicio | Qué hace |
@@ -77,7 +77,7 @@ Herramientas (`backend/taller/herramientas.py`). Nova 2 Lite no tiene modo `stri
 - **Bedrock Guardrails** en la entrada y en la salida.
 - **Límites de uso.** Throttling en API Gateway, 20 mensajes cada 10 minutos por conversación, fotos de 5 MB como máximo y URL prefirmada de 5 minutos.
 - **Retención mínima.** Las conversaciones y los mensajes expiran en 7 días (TTL) y las fotos también (ciclo de vida de S3).
-- **Panel protegido** con una clave guardada en Secrets Manager.
+- **Panel protegido** con una clave cifrada en SSM Parameter Store (`SecureString`). Un recurso personalizado la genera al desplegar, así que nunca aparece en la plantilla. Se usa Parameter Store y no Secrets Manager porque el nivel estándar no cuesta nada.
 - **Mínimo privilegio.** Cada Lambda recibe solo los permisos que usa.
 
 Qué faltaría para producción: autenticación real (por ejemplo, Cognito), verificación del número de teléfono, cifrado con KMS propio, WAF, revisión legal del manejo de datos personales, pruebas de carga y evaluaciones (evals) del agente.
@@ -166,7 +166,18 @@ Después ejecuta `python -m http.server 8000 -d frontend` y abre `http://localho
 
 ## Costos y limpieza
 
-Todo es serverless y se cobra por uso. Con Nova 2 Lite, el modelo y el Guardrail cuestan alrededor de un centavo de dólar por conversación completa; Lambda, DynamoDB y CloudFront suelen quedar dentro de sus límites gratuitos para una demo. El log de la Lambda del agente registra los tokens de cada llamada (`tokens entrada=… salida=… cache_leidos=…`). Para borrar todo:
+El stack no tiene costos fijos mensuales: sin tráfico cuesta prácticamente cero, y cada servicio queda dentro de la capa gratuita o se cobra solo por uso.
+
+| Servicio | Capa gratuita | Qué se paga (con los créditos, si la cuenta está en el *Free plan*) |
+|---|---|---|
+| Lambda, CloudFront, EventBridge Scheduler, CloudWatch Logs | Always Free (con sus límites mensuales) | Nada en una demo |
+| SSM Parameter Store (nivel estándar) | Sin costo | Nada |
+| DynamoDB (on-demand) | Almacenamiento Always Free (25 GB) | Peticiones por uso: fracciones de centavo en una demo |
+| Bedrock (Nova 2 Lite) y Bedrock Guardrails | No | Por uso: alrededor de un centavo de dólar por conversación completa |
+| API Gateway HTTP API | No | Por uso: USD 1 por millón de peticiones |
+| S3 (sitio, fotos y artefactos de CDK) | No | Almacenamiento: fracciones de centavo al mes (las fotos expiran en 7 días) |
+
+El log de la Lambda del agente registra los tokens de cada llamada (`tokens entrada=… salida=… cache_leidos=…`). Para borrar todo:
 
 ```bash
 cd infra

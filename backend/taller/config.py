@@ -24,7 +24,8 @@ GUARDRAIL_ID = os.environ.get("GUARDRAIL_ID", "")
 GUARDRAIL_VERSION = os.environ.get("GUARDRAIL_VERSION", "DRAFT")
 
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "")
-PANEL_SECRET_ARN = os.environ.get("PANEL_SECRET_ARN", "")
+# Parámetro SecureString de SSM Parameter Store (gratis, a diferencia de Secrets Manager) con la clave del panel.
+PANEL_PARAMETRO = os.environ.get("PANEL_PARAMETRO", "")
 
 MAX_PASOS_AGENTE = 8
 MAX_TEXTO = 1000

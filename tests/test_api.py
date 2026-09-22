@@ -1,6 +1,7 @@
 import json
 import uuid
 
+import boto3
 import pytest
 
 from taller import config, handler, store
@@ -64,3 +65,14 @@ def test_limite_de_mensajes(api, monkeypatch):
 def test_panel_requiere_clave(api):
     r = handler.api({"routeKey": "GET /panel/citas", "headers": {}}, None)
     assert r["statusCode"] == 401
+
+
+def test_panel_lee_la_clave_de_parameter_store(aws, monkeypatch):
+    boto3.client("ssm", region_name="us-east-2").put_parameter(Name="/Taller/clave-panel", Value="clave-demo",
+                                                               Type="SecureString")
+    monkeypatch.setattr(config, "PANEL_PARAMETRO", "/Taller/clave-panel")
+    handler._clave_panel.cache_clear()
+    evento = {"routeKey": "GET /panel/citas", "queryStringParameters": {"fecha": "2026-09-21"}}
+    assert handler.api({**evento, "headers": {"x-panel-key": "otra"}}, None)["statusCode"] == 401
+    assert handler.api({**evento, "headers": {"x-panel-key": "clave-demo"}}, None)["statusCode"] == 200
+    handler._clave_panel.cache_clear()

@@ -3,6 +3,7 @@ from pathlib import Path
 from aws_cdk import (
     BundlingOptions,
     CfnOutput,
+    CustomResource,
     Duration,
     RemovalPolicy,
     Stack,
@@ -18,13 +19,38 @@ from aws_cdk import (
     aws_s3 as s3,
     aws_s3_deployment as s3deploy,
     aws_scheduler as scheduler,
-    aws_secretsmanager as secrets,
+    custom_resources as cr,
 )
 from constructs import Construct
 
 RAIZ = Path(__file__).resolve().parents[1]
 GRUPO_RECORDATORIOS = "taller-recordatorios"
 PREFIJOS_PERFIL = {"us", "eu", "apac", "jp", "au", "ca", "global"}  # perfiles de inferencia entre regiones
+
+# CloudFormation no crea parámetros SecureString, así que un recurso personalizado genera la clave del panel al
+# desplegar (nunca aparece en la plantilla) y la borra al destruir el stack. Parameter Store estándar no tiene costo.
+CODIGO_CLAVE_PANEL = """
+import secrets
+import boto3
+
+ssm = boto3.client("ssm")
+
+
+def handler(evento, _contexto):
+    nombre = evento["ResourceProperties"]["Nombre"]
+    if evento["RequestType"] == "Delete":
+        try:
+            ssm.delete_parameter(Name=nombre)
+        except ssm.exceptions.ParameterNotFound:
+            pass
+    else:
+        try:
+            ssm.put_parameter(Name=nombre, Type="SecureString", Value=secrets.token_urlsafe(18), Overwrite=False,
+                              Description="Clave del panel del taller (demo)")
+        except ssm.exceptions.ParameterAlreadyExists:
+            pass
+    return {"PhysicalResourceId": nombre}
+"""
 
 
 class TallerStack(Stack):
@@ -128,11 +154,25 @@ class TallerStack(Stack):
         version_guardrail = bedrock.CfnGuardrailVersion(self, "GuardrailVersion",
                                                          guardrail_identifier=guardrail.attr_guardrail_id)
 
-        # ---------- secreto del panel ----------
-        clave_panel = secrets.Secret(
-            self, "ClavePanel",
-            description="Clave para entrar al panel del taller (demo)",
-            generate_secret_string=secrets.SecretStringGenerator(exclude_punctuation=True, password_length=24),
+        # ---------- clave del panel (SSM Parameter Store, SecureString) ----------
+        # Sin "/" inicial: así el comando de salida funciona igual en Git Bash (no convierte rutas).
+        parametro_panel = f"{construct_id}-clave-panel"
+        parametro_panel_arn = f"arn:aws:ssm:{self.region}:{self.account}:parameter/{parametro_panel}"
+        generador_clave = lambda_.Function(
+            self, "GeneradorClavePanel",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            handler="index.handler",
+            code=lambda_.Code.from_inline(CODIGO_CLAVE_PANEL),
+            timeout=Duration.seconds(30),
+            log_group=logs.LogGroup(self, "GeneradorClavePanelLogs", retention=logs.RetentionDays.ONE_WEEK,
+                                    removal_policy=RemovalPolicy.DESTROY),
+        )
+        generador_clave.add_to_role_policy(iam.PolicyStatement(
+            actions=["ssm:PutParameter", "ssm:DeleteParameter"], resources=[parametro_panel_arn]))
+        clave_panel = CustomResource(
+            self, "ClavePanelParametro",
+            service_token=cr.Provider(self, "ProveedorClavePanel", on_event_handler=generador_clave).service_token,
+            properties={"Nombre": parametro_panel},
         )
 
         # ---------- Lambdas ----------
@@ -185,7 +225,8 @@ class TallerStack(Stack):
         worker_fn.add_environment("RECORDATORIO_FUNCTION_ARN", recordatorio_fn.function_arn)
         worker_fn.add_environment("SCHEDULER_ROLE_ARN", rol_scheduler.role_arn)
         api_fn.add_environment("WORKER_FUNCTION", worker_fn.function_name)
-        api_fn.add_environment("PANEL_SECRET_ARN", clave_panel.secret_arn)
+        api_fn.add_environment("PANEL_PARAMETRO", parametro_panel)
+        api_fn.node.add_dependency(clave_panel)
         api_fn.add_environment("RECORDATORIO_FUNCTION_ARN", recordatorio_fn.function_arn)
 
         # permisos mínimos por función
@@ -198,7 +239,8 @@ class TallerStack(Stack):
         fotos.grant_put(api_fn)
         fotos.grant_read(api_fn)
         worker_fn.grant_invoke(api_fn)
-        clave_panel.grant_read(api_fn)
+        # La llave administrada aws/ssm ya permite descifrar vía SSM a quien tenga ssm:GetParameter en la cuenta.
+        api_fn.add_to_role_policy(iam.PolicyStatement(actions=["ssm:GetParameter"], resources=[parametro_panel_arn]))
 
         # Converse usa el permiso bedrock:InvokeModel. Un perfil de inferencia ("us.", "global.") enruta a varias
         # regiones, así que se permite el perfil y el modelo base en cualquier región, solo para los modelos configurados.
@@ -259,5 +301,5 @@ class TallerStack(Stack):
         CfnOutput(self, "PanelUrl", value=f"{origen_sitio}/panel.html")
         CfnOutput(self, "ApiUrl", value=api.api_endpoint)
         CfnOutput(self, "PanelKeyCommand",
-                  value=f"aws secretsmanager get-secret-value --secret-id {clave_panel.secret_arn} "
-                        f"--region {self.region} --query SecretString --output text")
+                  value=f"aws ssm get-parameter --name {parametro_panel} --with-decryption "
+                        f"--region {self.region} --query Parameter.Value --output text")

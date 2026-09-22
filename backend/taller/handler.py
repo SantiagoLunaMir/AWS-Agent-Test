@@ -50,12 +50,12 @@ def _cliente(servicio: str):
 
 @lru_cache(maxsize=1)
 def _clave_panel() -> str:
-    return _cliente("secretsmanager").get_secret_value(SecretId=config.PANEL_SECRET_ARN)["SecretString"]
+    return _cliente("ssm").get_parameter(Name=config.PANEL_PARAMETRO, WithDecryption=True)["Parameter"]["Value"]
 
 
 def _panel_autorizado(evento: dict) -> bool:
     recibida = (evento.get("headers") or {}).get("x-panel-key", "")
-    return bool(config.PANEL_SECRET_ARN) and hmac.compare_digest(recibida, _clave_panel())
+    return bool(config.PANEL_PARAMETRO) and hmac.compare_digest(recibida, _clave_panel())
 
 
 # =================== API ===================

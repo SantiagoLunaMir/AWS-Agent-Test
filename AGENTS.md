@@ -84,6 +84,7 @@ Cambia `Agente` por `Api` o `Recordatorio` para ver las otras funciones. Cada ll
 - **Foto opcional:** el cliente puede dar marca y modelo por texto. Si manda foto, `vision.py` la clasifica en una llamada aislada que obliga al modelo a usar la herramienta `registrar_vehiculo` (`toolChoice`), cuyo esquema es el JSON esperado; después `sanear` recorta cada campo. La imagen **nunca** entra a la conversación del agente.
 - **Skills:** `backend/taller/skills/<nombre>/SKILL.md` con frontmatter `name` y `description`. Se cargan solas al catálogo; el agente las abre con `cargar_skill`.
 - **Reglas del taller:** horarios, mecánicos y especialidades están en `backend/taller/agenda.py`.
+- **Clave del panel:** parámetro `SecureString` `TallerAgente-clave-panel` en SSM Parameter Store. Lo crea un recurso personalizado del stack (`CODIGO_CLAVE_PANEL` en `infra/taller_stack.py`) y lo borra al destruir el stack. No uses Secrets Manager: cobra por secreto al mes y el objetivo es no tener costos fijos.
 - **Configuración:** variables de entorno en `backend/taller/config.py`. Contexto de CDK: `modelId` (predeterminado `us.amazon.nova-2-lite-v1:0`), `visionModelId` (predeterminado: igual que `modelId`; debe aceptar imágenes), `razonamiento` (`low` por defecto; vacío lo apaga), `modoRecordatorio` (`demo` = 2 min después de agendar; `real` = 24 h antes) y `senderEmail` (SES opcional; en sandbox el destinatario debe estar verificado).
 - **Identificadores en español** en todo el código. Mantén ese estilo.
 
@@ -93,4 +94,4 @@ Cambia `Agente` por `Api` o `Recordatorio` para ver las otras funciones. Cada ll
 - No escribas la clave del panel en navegadores ni la pegues en archivos. Obtenla con `PanelKeyCommand` solo para pruebas por API.
 - Después de cambiar `backend/` o `frontend/`, corre `pytest -q`, vuelve a desplegar y ejecuta `smoke_test.py`.
 - El stack crea recursos con costo por uso. Si solo lo levantaste para probar, avisa al humano antes de destruirlo: `cd infra && npx aws-cdk destroy`.
-- Si la cuenta está en el *Free plan* de AWS, todo se paga con créditos y **la cuenta se cierra si se acaban**. No lances pruebas de carga ni bucles contra el modelo.
+- Si la cuenta está en el *Free plan* de AWS, todo se paga con créditos y **la cuenta se cierra si se acaban**. No lances pruebas de carga ni bucles contra el modelo, y no agregues servicios con costo fijo mensual (Secrets Manager, NAT Gateway, instancias o endpoints siempre encendidos).
