@@ -22,7 +22,7 @@ flowchart LR
     API --> L1[Lambda API]
     L1 -->|invocación asíncrona| L2[Lambda Agente]
     L2 -->|ApplyGuardrail| G[Bedrock Guardrails]
-    L2 -->|Messages API + tools| B[Claude en Amazon Bedrock]
+    L2 -->|Converse API + tools| B[Amazon Nova 2 Lite<br/>en Bedrock]
     L2 --> T{{Herramientas}}
     T -->|visión, JSON por esquema| B
     T --> DDB[(DynamoDB<br/>conversaciones · mensajes · citas)]
@@ -37,8 +37,8 @@ flowchart LR
 |---|---|---|
 | Chat y panel | S3 + CloudFront | HTML/JS estático, sin build |
 | Entrada | API Gateway HTTP API + Lambda | Valida, limita el ritmo y encola cada turno |
-| Agente | Lambda + **Claude en Bedrock** (SDK oficial `anthropic`) | Loop de razonamiento con herramientas |
-| Visión | Claude con salida JSON forzada por esquema | Clasifica el vehículo de la foto |
+| Agente | Lambda + **Amazon Nova 2 Lite en Bedrock** (API Converse con `boto3`) | Loop de razonamiento con herramientas |
+| Visión | Nova 2 Lite con una herramienta forzada (JSON por esquema) | Clasifica el vehículo de la foto |
 | Seguridad | **Bedrock Guardrails** (`ApplyGuardrail`) | Filtros de contenido, ataques de prompt, tema denegado (fraude vehicular), bloqueo de tarjetas y contraseñas |
 | Datos | DynamoDB (con TTL) | Conversaciones, mensajes y citas |
 | Recordatorios | EventBridge Scheduler → Lambda | Mensaje en el chat (y correo opcional) |
@@ -48,10 +48,10 @@ flowchart LR
 ### Cómo piensa el agente
 
 ```
-cliente escribe → Guardrail (entrada) → Claude decide → herramienta → resultado → Claude decide → … → Guardrail (salida) → chat
+cliente escribe → Guardrail (entrada) → el modelo decide → herramienta → resultado → el modelo decide → … → Guardrail (salida) → chat
 ```
 
-Herramientas (`backend/taller/herramientas.py`):
+Herramientas (`backend/taller/herramientas.py`). Nova 2 Lite no tiene modo `strict` para herramientas, así que **cada entrada se valida contra su esquema en código** antes de ejecutarse: parámetros faltantes o de más, tipos y valores permitidos. Por ejemplo, un `"false"` como texto no pasa como confirmación.
 
 | Herramienta | Regla que se valida **en código**, no solo en el prompt |
 |---|---|
@@ -82,10 +82,34 @@ Herramientas (`backend/taller/herramientas.py`):
 
 Qué faltaría para producción: autenticación real (por ejemplo, Cognito), verificación del número de teléfono, cifrado con KMS propio, WAF, revisión legal del manejo de datos personales, pruebas de carga y evaluaciones (evals) del agente.
 
+## Modelo: Amazon Nova 2 Lite
+
+El agente y el clasificador de fotos usan **Amazon Nova 2 Lite** (`us.amazon.nova-2-lite-v1:0`) mediante la **API Converse** de Bedrock:
+
+- **No pide formulario** de caso de uso y funciona en cuentas con el *Free plan* de AWS.
+- **Es barato:** USD 0.33 por millón de tokens de entrada y 2.75 de salida (us-east-2). Una conversación completa hasta agendar cuesta alrededor de un centavo de dólar.
+- **Acepta imágenes**, así que un solo modelo cubre el chat y la foto.
+- **Caché del prompt:** el prompt fijo (instrucciones y catálogo de skills) se marca con `cachePoint` y se cobra más barato en cada turno.
+- **Razonamiento extendido** opcional (`-c razonamiento=low|medium|high`). Su contenido llega censurado y no se guarda en el historial.
+
+Converse tiene el mismo formato para cualquier modelo de Bedrock, así que **cambiar de modelo es un parámetro**, sin tocar el código. Estos modelos pasaron el flujo de citas en español en las pruebas (sep 2026):
+
+| Modelo | USD por millón de tokens (entrada/salida) | Fotos | Notas |
+|---|---|---|---|
+| `us.amazon.nova-2-lite-v1:0` | 0.33 / 2.75 | ✅ | Predeterminado. Resistió los intentos de inyección de prompt |
+| `openai.gpt-oss-120b-1:0` | 0.15 / 0.60 | ❌ | El más barato. Combínalo con `visionModelId` de Nova 2 Lite |
+| `qwen.qwen3-235b-a22b-2507-v1:0` | 0.22 / 0.88 | ❌ | Estable en todas las pruebas |
+| `deepseek.v3.2` | 0.62 / 1.85 | ❌ | Más lento (≈13 s por flujo) |
+| `moonshotai.kimi-k2.5` | 0.60 / 3.00 | ✅ | Más lento; falló 1 de 4 flujos |
+
+> Para una demo de seguridad: `mistral.mistral-large-3-675b-instruct` completa el flujo, pero **sin Guardrail** reveló su prompt de sistema y agendó una cita a las 3 a. m. cuando se le pidió "ignora tus instrucciones". Es buen ejemplo de por qué el Guardrail y las validaciones en código no son opcionales.
+
+`python scripts/probar_modelos.py` revisa cuáles responden en tu cuenta y te da el comando de despliegue.
+
 ## Requisitos
 
-- Cuenta de AWS con acceso a un modelo **Claude en Amazon Bedrock**.
-  - Si Bedrock responde *"Model use case details have not been submitted"*, completa una vez el formulario de caso de uso de Anthropic en la consola de Bedrock (*Model catalog* → un modelo de Anthropic → *Submit use case details*).
+- Cuenta de AWS con acceso a **Amazon Bedrock** en la región del despliegue (por defecto us-east-2). Nova 2 Lite no pide formulario.
+  - **Free plan:** Bedrock no está en la capa *Always Free*, pero se paga con los créditos del plan. Si los créditos se acaban o el plan vence, AWS cierra la cuenta: pon un presupuesto en AWS Budgets y destruye el stack al terminar.
 - AWS CLI configurado, Python 3.12, Node.js 18+ y **Docker** encendido (CDK empaqueta la Lambda en un contenedor).
 
 ## Despliegue
@@ -109,17 +133,21 @@ Al terminar, CDK imprime:
 
 | Parámetro | Por defecto | Uso |
 |---|---|---|
-| `modelId` | `us.anthropic.claude-opus-4-6-v1` | Perfil de inferencia de Claude en Bedrock (usa el modelo más reciente que tenga habilitado tu cuenta) |
+| `modelId` | `us.amazon.nova-2-lite-v1:0` | Modelo del agente (cualquier modelo de Bedrock con herramientas en Converse) |
+| `visionModelId` | igual que `modelId` | Modelo que clasifica la foto. Debe aceptar imágenes |
+| `razonamiento` | `low` | Razonamiento extendido de Nova 2: `low`, `medium`, `high`, o vacío para apagarlo |
 | `modoRecordatorio` | `demo` | `demo` envía el recordatorio 2 minutos después de agendar; `real`, 24 h antes de la cita |
 | `senderEmail` | *(vacío)* | Remitente verificado en SES para enviar correos. En el sandbox de SES el destinatario también debe estar verificado |
 
-Ejemplo: `npx aws-cdk deploy -c modelId=us.anthropic.claude-opus-5 -c senderEmail=tu@correo.com`
+Ejemplo: `npx aws-cdk deploy -c modelId=openai.gpt-oss-120b-1:0 -c visionModelId=us.amazon.nova-2-lite-v1:0`
+
+El permiso `bedrock:InvokeModel` de la Lambda se limita a los modelos configurados.
 
 ## Pruebas
 
 ```bash
-pytest -q                               # unitarias: moto + cliente falso de Claude, sin AWS
-python scripts/probar_modelos.py        # qué modelos Claude puede invocar tu cuenta
+pytest -q                               # unitarias: moto + cliente falso de Bedrock, sin AWS
+python scripts/probar_modelos.py        # qué modelos puede usar el agente en tu cuenta
 python scripts/smoke_test.py            # de punta a punta contra el stack desplegado
 python scripts/smoke_test.py --flujo    # conversación completa hasta agendar una cita
 ```
@@ -138,7 +166,7 @@ Después ejecuta `python -m http.server 8000 -d frontend` y abre `http://localho
 
 ## Costos y limpieza
 
-Todo es serverless y se cobra por uso. El costo principal son las llamadas al modelo. Para borrar todo:
+Todo es serverless y se cobra por uso. Con Nova 2 Lite, el modelo y el Guardrail cuestan alrededor de un centavo de dólar por conversación completa; Lambda, DynamoDB y CloudFront suelen quedar dentro de sus límites gratuitos para una demo. El log de la Lambda del agente registra los tokens de cada llamada (`tokens entrada=… salida=… cache_leidos=…`). Para borrar todo:
 
 ```bash
 cd infra
@@ -151,7 +179,7 @@ npx aws-cdk destroy
 backend/taller/     código de las Lambdas (agente, herramientas, visión, guardrails, skills)
 frontend/           chat estilo mensajería + panel del taller (HTML/CSS/JS sin build)
 infra/              stack de AWS CDK en Python
-scripts/            prueba de humo y detector de modelos disponibles
+scripts/            prueba de humo y detector de modelos (Converse)
 tests/              pruebas con pytest + moto
 AGENTS.md           guía rápida para agentes de código (CLAUDE.md la importa)
 ```

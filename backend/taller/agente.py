@@ -1,11 +1,22 @@
-"""Loop del agente: Claude razona, llama herramientas, observa el resultado y repite hasta responder."""
+"""Loop del agente: el modelo razona, llama herramientas, observa el resultado y repite hasta responder.
+
+Usa la API Converse de Bedrock (Amazon Nova 2 Lite por defecto), que tiene el mismo formato para cualquier modelo.
+"""
 import json
 import logging
+import re
 
-from . import config, herramientas, skills
+from . import agenda, config, herramientas, skills
 from .llm import cliente
 
 log = logging.getLogger(__name__)
+
+RE_PENSAMIENTO = re.compile(r"<thinking>.*?</thinking>", re.DOTALL)
+RE_NEGRITAS_MD = re.compile(r"\*\*(.+?)\*\*")  # Markdown **x** → estilo mensajería *x*
+# stopReason con los que Bedrock o el modelo bloquean la respuesta.
+BLOQUEOS = {"content_filtered", "guardrail_intervened"}
+# stopReason con una llamada mal formada: se descarta y el modelo lo intenta de nuevo.
+MALFORMADOS = {"malformed_tool_use", "malformed_model_output"}
 
 SISTEMA = f"""Eres el asistente de citas de {config.NOMBRE_TALLER}, un taller mecánico. Atiendes por un chat \
 tipo mensajería: respuestas breves (1 a 4 líneas), cálidas y en español de México.
@@ -42,68 +53,87 @@ def _contexto_dinamico(ctx: herramientas.Contexto) -> str:
     estado = "sin vehículo identificado"
     if vehiculo:
         estado = f"{vehiculo['marca']} {vehiculo['modelo']} ({'confirmado' if vehiculo.get('confirmado') else 'sin confirmar'})"
-    dias = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
-    return (f"Fecha y hora actual: {dias[ctx.ahora.weekday()]} {ctx.ahora.strftime('%Y-%m-%d %H:%M')} "
+    return (f"Fecha y hora actual: {agenda.DIAS[ctx.ahora.weekday()]} {ctx.ahora.strftime('%Y-%m-%d %H:%M')} "
             f"({config.TZ}).\nCliente: {c.get('nombre', 'sin nombre')}, teléfono {c.get('telefono', '')}.\n"
             f"Vehículo en esta conversación: {estado}.")
 
 
 def recortar_historial(history: list[dict]) -> list[dict]:
-    """Recorta desde un mensaje de usuario con texto, sin separar tool_use de su tool_result."""
+    """Recorta desde un mensaje de usuario con texto, sin separar un toolUse de su toolResult."""
+    if any("type" in b for m in history for b in m["content"]):
+        return []  # historial con el formato anterior (Messages API de Anthropic): se empieza de cero
     if len(history) <= LIMITE_HISTORIAL:
         return history
     for i in range(len(history) - LIMITE_HISTORIAL, len(history)):
         m = history[i]
-        if m["role"] == "user" and not any(b.get("type") == "tool_result" for b in m["content"]):
+        if m["role"] == "user" and not any("toolResult" in b for b in m["content"]):
             return history[i:]
     return history[-2:]
+
+
+def _campos_del_modelo() -> dict:
+    """Parámetros propios del modelo. El razonamiento extendido solo existe en Nova 2."""
+    if config.RAZONAMIENTO and "amazon.nova-2" in config.MODEL_ID:
+        return {"additionalModelRequestFields": {
+            "reasoningConfig": {"type": "enabled", "maxReasoningEffort": config.RAZONAMIENTO}}}
+    return {}
 
 
 def responder(ctx: herramientas.Contexto, texto: str, foto_id: str | None) -> str:
     contenido = []
     if foto_id:
-        contenido.append({"type": "text", "text": f"[El cliente envió una foto. foto_id: {foto_id}]"})
+        contenido.append({"text": f"[El cliente envió una foto. foto_id: {foto_id}]"})
     if texto:
-        contenido.append({"type": "text", "text": texto})
+        contenido.append({"text": texto})
     history = recortar_historial(ctx.conv["history"])
     history.append({"role": "user", "content": contenido})
     ctx.conv["history"] = history
 
     tools = herramientas.definiciones()
     for _ in range(config.MAX_PASOS_AGENTE):
-        resp = cliente().messages.create(
-            model=config.MODEL_ID,
-            max_tokens=16000,
+        resp = cliente().converse(
+            modelId=config.MODEL_ID,
             system=[
-                {"type": "text", "text": SISTEMA, "cache_control": {"type": "ephemeral"}},
-                {"type": "text", "text": _contexto_dinamico(ctx)},
+                {"text": SISTEMA},
+                {"cachePoint": {"type": "default"}},  # caché del prompt fijo: lo que va antes de este punto
+                {"text": _contexto_dinamico(ctx)},
             ],
-            tools=tools,
-            thinking={"type": "adaptive"},
-            output_config={"effort": config.EFFORT},
             messages=history,
+            toolConfig=tools,
+            inferenceConfig={"maxTokens": 4000},
+            **_campos_del_modelo(),
         )
-        history.append({"role": "assistant", "content": [b.to_dict() for b in resp.content]})
+        motivo = resp["stopReason"]
+        uso_tokens = resp.get("usage", {})
+        log.info("modelo %s stop=%s tokens entrada=%s salida=%s cache_leidos=%s cache_escritos=%s", config.MODEL_ID,
+                 motivo, uso_tokens.get("inputTokens"), uso_tokens.get("outputTokens"),
+                 uso_tokens.get("cacheReadInputTokens", 0), uso_tokens.get("cacheWriteInputTokens", 0))
+        if motivo in MALFORMADOS:
+            log.warning("Respuesta mal formada del modelo (%s); se reintenta", motivo)
+            continue
+        if motivo in BLOQUEOS:
+            return "Perdón, no puedo ayudarte con eso. ¿Te ayudo a agendar una cita para tu vehículo?"
 
-        if resp.stop_reason == "tool_use":
+        # Solo se guardan texto y llamadas a herramientas; el razonamiento de Nova llega censurado y no hace falta.
+        bloques = [b for b in resp["output"]["message"]["content"] if b.get("text", "").strip() or "toolUse" in b]
+        history.append({"role": "assistant", "content": bloques or [{"text": "…"}]})
+
+        if motivo == "tool_use":
             resultados = []
-            for bloque in resp.content:
-                if bloque.type != "tool_use":
+            for bloque in bloques:
+                if "toolUse" not in bloque:
                     continue
-                salida, es_error = herramientas.ejecutar(ctx, bloque.name, bloque.input)
-                log.info("tool %s(%s) -> error=%s %s", bloque.name, json.dumps(bloque.input, ensure_ascii=False),
+                uso = bloque["toolUse"]
+                salida, es_error = herramientas.ejecutar(ctx, uso["name"], uso.get("input"))
+                log.info("tool %s(%s) -> error=%s %s", uso["name"], json.dumps(uso.get("input"), ensure_ascii=False),
                          es_error, salida[:300])
-                resultados.append({"type": "tool_result", "tool_use_id": bloque.id, "content": salida,
-                                   "is_error": es_error})
+                resultados.append({"toolResult": {"toolUseId": uso["toolUseId"], "content": [{"text": salida}],
+                                                  "status": "error" if es_error else "success"}})
             history.append({"role": "user", "content": resultados})
             continue
 
-        if resp.stop_reason == "refusal":
-            history.pop()
-            return "Perdón, no puedo ayudarte con eso. ¿Te ayudo a agendar una cita para tu vehículo?"
-
-        texto_final = "\n".join(b.text for b in resp.content if b.type == "text").strip()
-        return texto_final or "¿Me repites, por favor?"
+        texto_final = RE_PENSAMIENTO.sub("", "\n".join(b["text"] for b in bloques if "text" in b)).strip()
+        return RE_NEGRITAS_MD.sub(r"*\1*", texto_final) or "¿Me repites, por favor?"
 
     log.warning("El agente alcanzó el límite de %s pasos", config.MAX_PASOS_AGENTE)
     return "Estoy tardando más de lo normal. ¿Me confirmas qué necesitas para ayudarte?"

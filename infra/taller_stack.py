@@ -24,13 +24,16 @@ from constructs import Construct
 
 RAIZ = Path(__file__).resolve().parents[1]
 GRUPO_RECORDATORIOS = "taller-recordatorios"
+PREFIJOS_PERFIL = {"us", "eu", "apac", "jp", "au", "ca", "global"}  # perfiles de inferencia entre regiones
 
 
 class TallerStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
         ctx = self.node.try_get_context
-        model_id = ctx("modelId") or "us.anthropic.claude-opus-4-6-v1"
+        model_id = ctx("modelId") or "us.amazon.nova-2-lite-v1:0"
+        vision_model_id = ctx("visionModelId") or model_id
+        razonamiento = ctx("razonamiento") if ctx("razonamiento") is not None else "low"
         sender_email = ctx("senderEmail") or ""
         modo_recordatorio = ctx("modoRecordatorio") or "demo"
 
@@ -144,6 +147,8 @@ class TallerStack(Stack):
         )
         entorno = {
             "MODEL_ID": model_id,
+            "VISION_MODEL_ID": vision_model_id,
+            "RAZONAMIENTO": razonamiento,
             "TABLA_CONVERSACIONES": conversaciones.table_name,
             "TABLA_MENSAJES": mensajes.table_name,
             "TABLA_CITAS": citas.table_name,
@@ -195,11 +200,16 @@ class TallerStack(Stack):
         worker_fn.grant_invoke(api_fn)
         clave_panel.grant_read(api_fn)
 
-        worker_fn.add_to_role_policy(iam.PolicyStatement(
-            actions=["bedrock:InvokeModel"],
-            resources=["arn:aws:bedrock:*::foundation-model/anthropic.*",
-                       f"arn:aws:bedrock:*:{self.account}:inference-profile/*"],
-        ))
+        # Converse usa el permiso bedrock:InvokeModel. Un perfil de inferencia ("us.", "global.") enruta a varias
+        # regiones, así que se permite el perfil y el modelo base en cualquier región, solo para los modelos configurados.
+        recursos_modelo = set()
+        for modelo in {model_id, vision_model_id}:
+            base = modelo.split(".", 1)[1] if modelo.split(".", 1)[0] in PREFIJOS_PERFIL else modelo
+            recursos_modelo.add(f"arn:aws:bedrock:*::foundation-model/{base}")
+            if base != modelo:
+                recursos_modelo.add(f"arn:aws:bedrock:*:{self.account}:inference-profile/{modelo}")
+        worker_fn.add_to_role_policy(iam.PolicyStatement(actions=["bedrock:InvokeModel"],
+                                                         resources=sorted(recursos_modelo)))
         worker_fn.add_to_role_policy(iam.PolicyStatement(
             actions=["bedrock:ApplyGuardrail"], resources=[guardrail.attr_guardrail_arn],
         ))

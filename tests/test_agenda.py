@@ -55,3 +55,10 @@ def test_validar_hora():
     with pytest.raises(agenda.ErrorAgenda):
         agenda.validar_hora(date(2026, 9, 21), "18:00", LUNES_8AM)
     assert agenda.validar_hora(date(2026, 9, 21), "12:00", LUNES_8AM).hour == 12
+
+
+def test_cuando_legible():
+    from datetime import timedelta
+    assert agenda.cuando_legible(LUNES_8AM + timedelta(minutes=2), LUNES_8AM) == "en unos 2 minutos"
+    assert agenda.cuando_legible(datetime(2026, 9, 22, 9, 0, tzinfo=TZ), LUNES_8AM) == \
+        "el martes 22 de septiembre a las 09:00"

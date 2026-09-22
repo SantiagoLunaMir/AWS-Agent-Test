@@ -1,9 +1,10 @@
 import os
 
 REGION = os.environ.get("AWS_REGION", "us-east-2")
-MODEL_ID = os.environ.get("MODEL_ID", "us.anthropic.claude-opus-4-6-v1")
-VISION_MODEL_ID = os.environ.get("VISION_MODEL_ID", MODEL_ID)
-EFFORT = os.environ.get("EFFORT", "medium")
+MODEL_ID = os.environ.get("MODEL_ID", "us.amazon.nova-2-lite-v1:0")
+VISION_MODEL_ID = os.environ.get("VISION_MODEL_ID") or MODEL_ID
+# Razonamiento extendido de Nova 2 ("low", "medium", "high"); vacío lo apaga. Solo se envía a modelos Nova 2.
+RAZONAMIENTO = os.environ.get("RAZONAMIENTO", "low")
 TZ = os.environ.get("TALLER_TZ", "America/Mexico_City")
 NOMBRE_TALLER = os.environ.get("NOMBRE_TALLER", "Taller Pistón")
 

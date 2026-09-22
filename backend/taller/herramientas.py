@@ -44,8 +44,8 @@ def _obj(propiedades: dict, requeridas: list[str] | None = None) -> dict:
             "required": requeridas if requeridas is not None else list(propiedades), "additionalProperties": False}
 
 
-def definiciones() -> list[dict]:
-    tools = [
+def _catalogo() -> list[dict]:
+    return [
         {
             "name": "identificar_vehiculo",
             "description": "Analiza la foto que envió el cliente y devuelve marca, modelo, tipo, color y confianza. "
@@ -97,9 +97,39 @@ def definiciones() -> list[dict]:
             "input_schema": _obj({"nombre": {"type": "string", "enum": sorted(skills.catalogo())}}),
         },
     ]
-    for t in tools:
-        t["strict"] = True
-    return tools
+
+
+def definiciones() -> dict:
+    """toolConfig de la API Converse. Nova 2 Lite no tiene modo `strict`: `ejecutar` valida cada entrada."""
+    return {"tools": [{"toolSpec": {"name": t["name"], "description": t["description"],
+                                    "inputSchema": {"json": t["input_schema"]}}} for t in _catalogo()]}
+
+
+TIPOS_JSON = {"string": str, "boolean": bool}
+
+
+def validar_entrada(esquema: dict, entrada) -> str | None:
+    """Revisa la entrada contra el esquema de la herramienta y devuelve el error o None.
+
+    Sin modo strict, el modelo podría mandar "false" como texto, y en Python un texto no vacío es verdadero:
+    una confirmación falsa pasaría como verdadera. Por eso los tipos se revisan aquí.
+    """
+    if not isinstance(entrada, dict):
+        return "la entrada debe ser un objeto JSON"
+    propiedades = esquema["properties"]
+    sobran = sorted(set(entrada) - set(propiedades))
+    if sobran:
+        return f"parámetros no permitidos: {', '.join(sobran)}"
+    faltan = [k for k in esquema["required"] if k not in entrada]
+    if faltan:
+        return f"faltan parámetros: {', '.join(faltan)}"
+    for clave, valor in entrada.items():
+        prop = propiedades[clave]
+        if not isinstance(valor, TIPOS_JSON[prop["type"]]):
+            return f"{clave} debe ser de tipo {prop['type']}"
+        if "enum" in prop and valor not in prop["enum"]:
+            return f"{clave} debe ser uno de: {', '.join(prop['enum'])}"
+    return None
 
 
 @lru_cache(maxsize=1)
@@ -144,8 +174,7 @@ def confirmar_vehiculo(ctx: Contexto, marca: str, modelo: str, confirmado_por_cl
 def consultar_disponibilidad(ctx: Contexto, fecha: str) -> dict:
     dia = agenda.parsear_fecha(fecha, ctx.ahora)
     libres = agenda.horarios_libres(dia, store.citas_por_fecha(dia.isoformat()), ctx.ahora)
-    return {"fecha": dia.isoformat(), "dia_semana": ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado",
-                                                     "domingo"][dia.weekday()], "horarios_libres": libres}
+    return {"fecha": dia.isoformat(), "dia_semana": agenda.DIAS[dia.weekday()], "horarios_libres": libres}
 
 
 def agendar_cita(ctx: Contexto, fecha: str, hora: str, servicio: str, descripcion: str, email: str,
@@ -213,9 +242,13 @@ def agendar_cita(ctx: Contexto, fecha: str, hora: str, servicio: str, descripcio
     correo = notificaciones.enviar_correo(email, f"Cita confirmada {cita_id} - {config.NOMBRE_TALLER}",
                                           notificaciones.texto_cita(cita))
     ctx.conv["vehiculo"] = None
-    return {"ok": True, "cita_id": cita_id, "fecha": cita["fecha"], "hora": hora,
-            "mecanico": mecanico["nombre"], "servicio": servicio,
-            "recordatorio_programado_para": cita["recordatorio"], "correo": correo}
+    recordatorio = "no se pudo programar"
+    if cita["recordatorio"]:
+        momento = datetime.fromisoformat(cita["recordatorio"])
+        recordatorio = f"{agenda.cuando_legible(momento, ctx.ahora)}, como mensaje en este chat"
+    return {"ok": True, "cita_id": cita_id, "fecha": cita["fecha"], "dia_semana": agenda.DIAS[dia.weekday()],
+            "hora": hora, "mecanico": mecanico["nombre"], "servicio": servicio, "recordatorio": recordatorio,
+            "correo": correo}
 
 
 def mis_citas(ctx: Contexto) -> dict:
@@ -261,10 +294,14 @@ IMPLEMENTACIONES = {
 
 
 def ejecutar(ctx: Contexto, nombre: str, entrada: dict) -> tuple[str, bool]:
-    """Devuelve (contenido, es_error) listo para un bloque tool_result."""
+    """Devuelve (contenido, es_error) listo para un bloque toolResult."""
     funcion = IMPLEMENTACIONES.get(nombre)
     if funcion is None:
         return f"Herramienta desconocida: {nombre}", True
+    esquema = next(t["input_schema"] for t in _catalogo() if t["name"] == nombre)
+    error = validar_entrada(esquema, entrada)
+    if error:
+        return f"Parámetros inválidos: {error}. Corrige la llamada.", True
     try:
         return json.dumps(funcion(ctx, **entrada), ensure_ascii=False), False
     except (ErrorHerramienta, agenda.ErrorAgenda) as e:

@@ -1,11 +1,12 @@
-"""Clasificador de vehículos: una llamada aislada a Claude con salida JSON forzada por esquema.
+"""Clasificador de vehículos: una llamada aislada al modelo con salida JSON por esquema.
 
 La foto nunca entra a la conversación del agente principal: el agente solo ve este JSON.
 Así, un texto escrito dentro de la imagen no puede darle instrucciones al agente.
-"""
-import base64
-import json
 
+Nova 2 Lite no acepta `outputConfig` (salida estructurada), así que se obliga al modelo a llamar una
+herramienta cuyo esquema es el JSON que queremos (`toolChoice`). Funciona igual en cualquier modelo de
+Converse que soporte herramientas. Aun así, `sanear` revisa y recorta cada campo.
+"""
 from . import config
 from .llm import cliente
 
@@ -36,25 +37,31 @@ SISTEMA = (
 )
 
 
+HERRAMIENTA = "registrar_vehiculo"
+
+
 def clasificar(imagen: bytes, media_type: str) -> dict:
-    resp = cliente().messages.create(
-        model=config.VISION_MODEL_ID,
-        max_tokens=1024,
-        system=SISTEMA,
-        output_config={"effort": "low", "format": {"type": "json_schema", "schema": ESQUEMA}},
+    resp = cliente().converse(
+        modelId=config.VISION_MODEL_ID,
+        system=[{"text": SISTEMA}],
         messages=[{
             "role": "user",
             "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": media_type,
-                                             "data": base64.standard_b64encode(imagen).decode()}},
-                {"type": "text", "text": "Clasifica el vehículo de esta foto."},
+                {"image": {"format": media_type.split("/")[1], "source": {"bytes": imagen}}},
+                {"text": "Clasifica el vehículo de esta foto."},
             ],
         }],
+        toolConfig={
+            "tools": [{"toolSpec": {"name": HERRAMIENTA, "description": "Registra el vehículo identificado en la foto.",
+                                    "inputSchema": {"json": ESQUEMA}}}],
+            "toolChoice": {"tool": {"name": HERRAMIENTA}},
+        },
+        inferenceConfig={"maxTokens": 1024, "temperature": 0},
     )
-    if resp.stop_reason == "refusal":
+    usos = [b["toolUse"] for b in resp["output"]["message"]["content"] if "toolUse" in b]
+    if resp["stopReason"] != "tool_use" or not usos or not isinstance(usos[0].get("input"), dict):
         return {"es_vehiculo": False, "error": "No fue posible analizar la imagen."}
-    datos = json.loads(next(b.text for b in resp.content if b.type == "text"))
-    return sanear(datos)
+    return sanear(usos[0]["input"])
 
 
 def sanear(datos: dict) -> dict:

@@ -24,6 +24,10 @@ ORIGEN_MARCA = {
 SERVICIOS = ["diagnostico", "afinacion", "cambio_aceite", "frenos", "suspension", "electrico", "aire_acondicionado",
              "alineacion_balanceo", "otro"]
 
+DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre",
+         "noviembre", "diciembre"]
+
 
 class ErrorAgenda(ValueError):
     pass
@@ -35,6 +39,14 @@ def origen_marca(marca: str) -> str:
         if m in marcas:
             return origen
     return "general"
+
+
+def cuando_legible(momento: datetime, ahora: datetime) -> str:
+    """Fecha en palabras para el modelo: evita que interprete mal un timestamp ISO."""
+    minutos = round((momento - ahora).total_seconds() / 60)
+    if minutos < 60:
+        return f"en unos {max(minutos, 1)} minutos"
+    return f"el {DIAS[momento.weekday()]} {momento.day} de {MESES[momento.month - 1]} a las {momento:%H:%M}"
 
 
 def slots_del_dia(dia: date) -> list[str]:

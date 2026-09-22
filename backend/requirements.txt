@@ -1,2 +1,2 @@
-anthropic[bedrock]>=1.8,<2
+boto3>=1.40
 tzdata>=2025.2
