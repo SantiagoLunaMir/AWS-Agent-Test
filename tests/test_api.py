@@ -7,6 +7,9 @@ import pytest
 from taller import config, handler, store
 
 
+CLAVE_CHAT = "CHATDEMO23"
+
+
 @pytest.fixture
 def api(aws, monkeypatch):
     invocaciones = []
@@ -15,8 +18,13 @@ def api(aws, monkeypatch):
         def invoke(self, **kw):
             invocaciones.append(json.loads(kw["Payload"]))
 
-    monkeypatch.setattr(handler, "_cliente", lambda s: LambdaFalso() if s == "lambda" else None)
-    return invocaciones
+    ssm = boto3.client("ssm", region_name="us-east-2")
+    ssm.put_parameter(Name="Taller-clave-chat", Value=CLAVE_CHAT, Type="SecureString")
+    monkeypatch.setattr(config, "CHAT_PARAMETRO", "Taller-clave-chat")
+    monkeypatch.setattr(handler, "_cliente", lambda s: LambdaFalso() if s == "lambda" else ssm)
+    handler._claves.clear()
+    yield invocaciones
+    handler._claves.clear()
 
 
 def test_recordatorio_con_fecha_legible(aws):
@@ -29,8 +37,8 @@ def test_recordatorio_con_fecha_legible(aws):
     assert "es el lunes 28 de septiembre a las 14:00" in texto and "2026-09-28" not in texto
 
 
-def post_chat(cuerpo):
-    return handler.api({"routeKey": "POST /chat", "body": json.dumps(cuerpo)}, None)
+def post_chat(cuerpo, clave=CLAVE_CHAT):
+    return handler.api({"routeKey": "POST /chat", "body": json.dumps(cuerpo), "headers": {"x-chat-key": clave}}, None)
 
 
 def base(**extra):
@@ -81,8 +89,32 @@ def test_panel_lee_la_clave_de_parameter_store(aws, monkeypatch):
     boto3.client("ssm", region_name="us-east-2").put_parameter(Name="/Taller/clave-panel", Value="clave-demo",
                                                                Type="SecureString")
     monkeypatch.setattr(config, "PANEL_PARAMETRO", "/Taller/clave-panel")
-    handler._clave_panel.cache_clear()
+    handler._claves.clear()
     evento = {"routeKey": "GET /panel/citas", "queryStringParameters": {"fecha": "2026-09-21"}}
     assert handler.api({**evento, "headers": {"x-panel-key": "otra"}}, None)["statusCode"] == 401
     assert handler.api({**evento, "headers": {"x-panel-key": "clave-demo"}}, None)["statusCode"] == 200
-    handler._clave_panel.cache_clear()
+    handler._claves.clear()
+
+
+@pytest.mark.parametrize("clave", ["", "OTRA", "chatdemo23", "ñandú"])
+def test_chat_requiere_codigo_de_acceso(api, clave):
+    r = post_chat(base(), clave=clave)
+    assert r["statusCode"] == 401 and api == [], "sin el código correcto no se invoca al agente"
+    for ruta in ("GET /mensajes", "POST /fotos"):
+        assert handler.api({"routeKey": ruta, "headers": {"x-chat-key": clave}}, None)["statusCode"] == 401
+
+
+def test_sin_parametro_configurado_el_chat_se_cierra(api, monkeypatch):
+    monkeypatch.setattr(config, "CHAT_PARAMETRO", "")
+    assert post_chat(base())["statusCode"] == 401
+
+
+def test_clave_rotada_aplica_al_vencer_la_cache(api):
+    assert post_chat(base())["statusCode"] == 202
+    boto3.client("ssm", region_name="us-east-2").put_parameter(Name="Taller-clave-chat", Value="NUEVA23456",
+                                                               Type="SecureString", Overwrite=True)
+    assert post_chat(base())["statusCode"] == 202, "dentro de la caché sigue valiendo la anterior"
+    valor, _ = handler._claves["Taller-clave-chat"]
+    handler._claves["Taller-clave-chat"] = (valor, 0.0)  # la caché venció
+    assert post_chat(base())["statusCode"] == 401
+    assert post_chat(base(), clave="NUEVA23456")["statusCode"] == 202

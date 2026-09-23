@@ -1,11 +1,12 @@
-"""Prueba de humo contra el stack desplegado: API, subida de foto, conversación con el agente y panel.
+"""Prueba de humo contra el stack desplegado: código de acceso, API, subida de foto, conversación y panel.
 
 Uso:
     python scripts/smoke_test.py            # un turno de chat + fotos + panel
     python scripts/smoke_test.py --flujo    # conversación completa hasta agendar una cita
     python scripts/smoke_test.py --api https://xxxx.execute-api.us-east-2.amazonaws.com
 
-Lee `cdk-outputs.json` (lo genera `npx aws-cdk deploy --outputs-file ../cdk-outputs.json`).
+Lee `cdk-outputs.json` (lo genera `npx aws-cdk deploy --outputs-file ../cdk-outputs.json`) y obtiene las claves
+del chat y del panel con `ChatKeyCommand` y `PanelKeyCommand` (necesita credenciales de AWS).
 Sale con código 1 si algo falla.
 """
 import argparse
@@ -47,15 +48,18 @@ def paso(nombre: str, ok: bool, detalle: str = "") -> None:
         raise Fallo(nombre)
 
 
-def turno(api: str, sid: str, cliente: dict, texto: str, timeout: int = 180) -> list[str]:
-    r = requests.post(f"{api}/chat", json={"session_id": sid, "texto": texto, "cliente": cliente}, timeout=15)
+def turno(api: str, sid: str, cliente: dict, texto: str, clave: str, timeout: int = 180) -> list[str]:
+    cabeceras = {"x-chat-key": clave}
+    r = requests.post(f"{api}/chat", json={"session_id": sid, "texto": texto, "cliente": cliente},
+                      headers=cabeceras, timeout=15)
     paso(f"POST /chat «{texto[:40]}…»", r.status_code == 202, str(r.status_code))
     desde = r.json()["sk"]
     respuestas = []
     limite = time.time() + timeout
     while time.time() < limite:
         time.sleep(2)
-        datos = requests.get(f"{api}/mensajes", params={"session_id": sid, "desde": desde}, timeout=15).json()
+        datos = requests.get(f"{api}/mensajes", params={"session_id": sid, "desde": desde}, headers=cabeceras,
+                             timeout=15).json()
         for m in datos["mensajes"]:
             desde = m["sk"]
             if m["rol"] == "agente":
@@ -71,10 +75,10 @@ def turno(api: str, sid: str, cliente: dict, texto: str, timeout: int = 180) -> 
     return respuestas
 
 
-def clave_panel(datos: dict) -> str:
-    comando = datos.get("PanelKeyCommand")
+def clave(datos: dict, salida: str) -> str:
+    comando = datos.get(salida)
     if not comando:
-        raise Fallo("Falta PanelKeyCommand en cdk-outputs.json")
+        raise Fallo(f"Falta {salida} en cdk-outputs.json. Vuelve a desplegar con --outputs-file ../cdk-outputs.json")
     return subprocess.run(comando, shell=True, capture_output=True, text=True, check=True).stdout.strip()
 
 
@@ -91,10 +95,16 @@ def main() -> int:
         cliente = {"nombre": "Smoke Test", "telefono": telefono}
         print(f"API {api}\nsesión {sid} · teléfono ficticio {telefono}")
 
-        r = requests.post(f"{api}/chat", json={"session_id": "x", "texto": "hola", "cliente": cliente}, timeout=15)
+        r = requests.post(f"{api}/chat", json={"session_id": sid, "texto": "hola", "cliente": cliente}, timeout=15)
+        paso("chat sin código de acceso (401)", r.status_code == 401)
+        clave_chat = clave(datos, "ChatKeyCommand")
+        cabeceras = {"x-chat-key": clave_chat}
+        r = requests.post(f"{api}/chat", json={"session_id": "x", "texto": "hola", "cliente": cliente},
+                          headers=cabeceras, timeout=15)
         paso("validación de entrada (400)", r.status_code == 400)
 
-        r = requests.post(f"{api}/fotos", json={"session_id": sid, "content_type": "image/jpeg"}, timeout=15)
+        r = requests.post(f"{api}/fotos", json={"session_id": sid, "content_type": "image/jpeg"}, headers=cabeceras,
+                          timeout=15)
         paso("POST /fotos (URL prefirmada)", r.status_code == 200)
         firma = r.json()
         subida = requests.post(firma["url"], data=firma["fields"],
@@ -103,13 +113,14 @@ def main() -> int:
 
         mensajes = FLUJO if args.flujo else FLUJO[:1]
         for texto in mensajes:
-            turno(api, sid, cliente, texto)
+            turno(api, sid, cliente, texto, clave_chat)
 
         r = requests.get(f"{api}/panel/citas", timeout=15)
         paso("panel sin clave (401)", r.status_code == 401)
-        clave = clave_panel(datos)
+        clave_panel = clave(datos, "PanelKeyCommand")
         manana = time.strftime("%Y-%m-%d", time.localtime(time.time() + 86400))
-        r = requests.get(f"{api}/panel/citas", params={"fecha": manana}, headers={"x-panel-key": clave}, timeout=15)
+        r = requests.get(f"{api}/panel/citas", params={"fecha": manana}, headers={"x-panel-key": clave_panel},
+                         timeout=15)
         paso("panel con clave (200)", r.status_code == 200)
         if args.flujo:
             mias = [c for c in r.json()["citas"] if c["telefono"] == telefono and c["estado"] == "confirmada"]
@@ -121,7 +132,7 @@ def main() -> int:
                 print(f"      cita {c['cita_id']} {c['fecha']} {c['hora']} · {c['marca']} {c['modelo']} · "
                       f"{c['mecanico_nombre']}")
                 r = requests.post(f"{api}/panel/citas/{c['cita_id']}/estado", json={"estado": "cancelada"},
-                                  headers={"x-panel-key": clave}, timeout=15)
+                                  headers={"x-panel-key": clave_panel}, timeout=15)
                 paso("limpieza: cita de prueba cancelada", r.status_code == 200)
         print("\nTodo OK")
         return 0

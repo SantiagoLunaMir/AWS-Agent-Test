@@ -38,11 +38,11 @@ npx -y aws-cdk@latest deploy --require-approval never --outputs-file ../cdk-outp
 cd ..
 
 # 5. Prueba de humo de punta a punta contra lo desplegado
-python scripts/smoke_test.py            # 1 turno de chat + fotos + panel
+python scripts/smoke_test.py            # código de acceso + 1 turno de chat + fotos + panel
 python scripts/smoke_test.py --flujo    # conversación completa hasta agendar (y cancela la cita al final)
 ```
 
-`cdk-outputs.json` contiene `ChatUrl`, `PanelUrl`, `ApiUrl` y `PanelKeyCommand`. Está en `.gitignore`: **no lo subas**.
+`cdk-outputs.json` contiene `ChatUrl`, `PanelUrl`, `ApiUrl`, `ChatKeyCommand` y `PanelKeyCommand`. Está en `.gitignore`: **no lo subas**. Para que un humano pruebe el chat, dale `<ChatUrl>/#clave=<código>` con el código de `ChatKeyCommand`.
 
 ## Resultados esperados
 
@@ -63,6 +63,7 @@ python scripts/smoke_test.py --flujo    # conversación completa hasta agendar (
 | `ENOTEMPTY ... jsii-kernel` al terminar un comando CDK en Windows | Limpieza de un temporal de jsii | Inofensivo, ignóralo |
 | `ModuleNotFoundError: pydantic_core` en pytest | pytest recorrió `infra/cdk.out` | `pytest.ini` ya fija `testpaths = tests`: corre pytest desde la raíz |
 | El bundling de la Lambda falla | Docker apagado | Enciende Docker; CDK empaqueta con la imagen oficial de Python 3.12 |
+| `401 Código de acceso inválido` en `/chat`, `/mensajes` o `/fotos`, o el chat vuelve a pedir el código | Falta la cabecera `x-chat-key` o el código cambió en Parameter Store | Obtén el vigente con `ChatKeyCommand`. Tras rotarlo, la Lambda tarda hasta 5 min en leerlo (`config.SEGUNDOS_CACHE_CLAVES`) |
 
 ### Ver logs
 
@@ -78,20 +79,20 @@ Cambia `Agente` por `Api` o `Recordatorio` para ver las otras funciones. Cada ll
 
 ## Cómo está armado (lo mínimo para modificarlo)
 
-- **Flujo de un turno:** `POST /chat` → Lambda `api` valida, limita el ritmo y hace `lambda.invoke(InvocationType="Event")` → Lambda `procesar` corre Guardrail (entrada) → `agente.responder()` → Guardrail (salida) → guarda el mensaje en DynamoDB. El frontend consulta `GET /mensajes` cada 2 s. Es asíncrono para no chocar con el límite de 30 s de API Gateway.
+- **Flujo de un turno:** `POST /chat` → Lambda `api` revisa el código de acceso (`x-chat-key`), valida, limita el ritmo y hace `lambda.invoke(InvocationType="Event")` → Lambda `procesar` corre Guardrail (entrada) → `agente.responder()` → Guardrail (salida) → guarda el mensaje en DynamoDB. El frontend consulta `GET /mensajes` cada 2 s. Es asíncrono para no chocar con el límite de 30 s de API Gateway.
 - **Modelo:** `llm.py` crea el cliente `bedrock-runtime`. `agente.py` usa `converse()` con el prompt fijo antes de un `cachePoint`, las herramientas en `toolConfig` y razonamiento opcional de Nova 2 en `additionalModelRequestFields`. El historial guarda solo bloques `text`, `toolUse` y `toolResult` (formato Converse). Para cambiar de modelo usa `-c modelId=...` al desplegar; no hace falta tocar código.
 - **Herramientas:** `backend/taller/herramientas.py`. Las reglas críticas (confirmación del cliente, horarios, máximo 2 citas activas, reserva atómica del horario, dueño de la cita) se validan **en código**. Como Nova 2 Lite no tiene modo `strict`, `validar_entrada` revisa cada entrada contra su esquema (tipos, `enum`, parámetros faltantes o de más). Si agregas una herramienta, usa solo tipos `string`/`boolean` o amplía `TIPOS_JSON`. Lo que el modelo no respeta solo con el prompt se resuelve en la herramienta: `consultar_disponibilidad` devuelve en `proponer` hasta 3 horarios repartidos, y los mensajes al cliente usan `agenda.fecha_legible` ("lunes 28 de septiembre"), nunca la fecha ISO.
 - **Foto opcional:** el cliente puede dar marca y modelo por texto. Si manda foto, `vision.py` la clasifica en una llamada aislada que obliga al modelo a usar la herramienta `registrar_vehiculo` (`toolChoice`), cuyo esquema es el JSON esperado; después `sanear` recorta cada campo. La imagen **nunca** entra a la conversación del agente.
 - **Skills:** `backend/taller/skills/<nombre>/SKILL.md` con frontmatter `name` y `description`. Se cargan solas al catálogo; el agente las abre con `cargar_skill`.
 - **Reglas del taller:** horarios, mecánicos y especialidades están en `backend/taller/agenda.py`.
-- **Clave del panel:** parámetro `SecureString` `TallerAgente-clave-panel` en SSM Parameter Store. Lo crea un recurso personalizado del stack (`CODIGO_CLAVE_PANEL` en `infra/taller_stack.py`) y lo borra al destruir el stack. No uses Secrets Manager: cobra por secreto al mes y el objetivo es no tener costos fijos.
+- **Claves del panel y del chat:** parámetros `SecureString` `TallerAgente-clave-panel` (cabecera `x-panel-key`) y `TallerAgente-clave-chat` (cabecera `x-chat-key`, protege `/chat`, `/mensajes` y `/fotos`) en SSM Parameter Store. Los crea un recurso personalizado del stack (`CODIGO_CLAVES` en `infra/taller_stack.py`) si no existen y los borra al destruir el stack. `handler._autorizado` los compara en tiempo constante y los relee cada 5 minutos, así que rotarlos no requiere desplegar. Sin parámetro configurado, la ruta responde 401. No uses Secrets Manager: cobra por secreto al mes y el objetivo es no tener costos fijos.
 - **Configuración:** variables de entorno en `backend/taller/config.py`. Contexto de CDK: `modelId` (predeterminado `us.amazon.nova-2-lite-v1:0`), `visionModelId` (predeterminado: igual que `modelId`; debe aceptar imágenes), `razonamiento` (`low` por defecto; vacío lo apaga), `modoRecordatorio` (`demo` = 2 min después de agendar; `real` = 24 h antes) y `senderEmail` (SES opcional; en sandbox el destinatario debe estar verificado). Sin `senderEmail`, `agente.PASO_AGENDAR` le indica al modelo que no ofrezca correo y `agendar_cita` no guarda el que dé el cliente.
 - **Identificadores en español** en todo el código. Mantén ese estilo.
 
 ## Reglas para agentes
 
 - No hagas commit de `cdk-outputs.json`, `frontend/config.json`, `.env`, credenciales ni datos reales. Usa solo teléfonos y nombres ficticios.
-- No escribas la clave del panel en navegadores ni la pegues en archivos. Obtenla con `PanelKeyCommand` solo para pruebas por API.
+- No escribas la clave del panel ni el código del chat en navegadores ni los pegues en archivos o commits. Obtenlos con `PanelKeyCommand` / `ChatKeyCommand` solo para pruebas por API; el humano es quien los usa en el navegador.
 - Después de cambiar `backend/` o `frontend/`, corre `pytest -q`, vuelve a desplegar y ejecuta `smoke_test.py`.
 - El stack crea recursos con costo por uso. Si solo lo levantaste para probar, avisa al humano antes de destruirlo: `cd infra && npx aws-cdk destroy`.
 - Si la cuenta está en el *Free plan* de AWS, todo se paga con créditos y **la cuenta se cierra si se acaban**. No lances pruebas de carga ni bucles contra el modelo, y no agregues servicios con costo fijo mensual (Secrets Manager, NAT Gateway, instancias o endpoints siempre encendidos).

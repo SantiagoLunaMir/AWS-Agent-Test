@@ -48,20 +48,31 @@ def _cliente(servicio: str):
     return boto3.client(servicio, region_name=config.REGION)
 
 
-@lru_cache(maxsize=1)
-def _clave_panel() -> str:
-    return _cliente("ssm").get_parameter(Name=config.PANEL_PARAMETRO, WithDecryption=True)["Parameter"]["Value"]
+_claves: dict[str, tuple[str, float]] = {}  # parámetro -> (valor, vence)
 
 
-def _panel_autorizado(evento: dict) -> bool:
-    recibida = (evento.get("headers") or {}).get("x-panel-key", "")
-    return bool(config.PANEL_PARAMETRO) and hmac.compare_digest(recibida, _clave_panel())
+def _clave(parametro: str) -> str:
+    valor, vence = _claves.get(parametro, ("", 0.0))
+    if time.time() >= vence:
+        valor = _cliente("ssm").get_parameter(Name=parametro, WithDecryption=True)["Parameter"]["Value"]
+        _claves[parametro] = (valor, time.time() + config.SEGUNDOS_CACHE_CLAVES)
+    return valor
+
+
+def _autorizado(evento: dict, cabecera: str, parametro: str) -> bool:
+    recibida = (evento.get("headers") or {}).get(cabecera, "")
+    return bool(parametro) and hmac.compare_digest(recibida.encode(), _clave(parametro).encode())
 
 
 # =================== API ===================
+RUTAS_CHAT = {"POST /chat", "GET /mensajes", "POST /fotos"}
+
+
 def api(evento, _contexto):
     ruta = evento.get("routeKey", "")
     try:
+        if ruta in RUTAS_CHAT and not _autorizado(evento, "x-chat-key", config.CHAT_PARAMETRO):
+            return _resp(401, {"error": "Código de acceso inválido."})
         if ruta == "POST /chat":
             return enviar_mensaje(_json(evento))
         if ruta == "GET /mensajes":
@@ -69,7 +80,7 @@ def api(evento, _contexto):
         if ruta == "POST /fotos":
             return url_subida_foto(_json(evento))
         if ruta.startswith(("GET /panel", "POST /panel")):
-            if not _panel_autorizado(evento):
+            if not _autorizado(evento, "x-panel-key", config.PANEL_PARAMETRO):
                 return _resp(401, {"error": "Clave del panel inválida."})
             if ruta == "GET /panel/citas":
                 return panel_citas(evento.get("queryStringParameters") or {})

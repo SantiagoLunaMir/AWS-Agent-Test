@@ -27,17 +27,27 @@ RAIZ = Path(__file__).resolve().parents[1]
 GRUPO_RECORDATORIOS = "taller-recordatorios"
 PREFIJOS_PERFIL = {"us", "eu", "apac", "jp", "au", "ca", "global"}  # perfiles de inferencia entre regiones
 
-# CloudFormation no crea parámetros SecureString, así que un recurso personalizado genera la clave del panel al
-# desplegar (nunca aparece en la plantilla) y la borra al destruir el stack. Parameter Store estándar no tiene costo.
-CODIGO_CLAVE_PANEL = """
+# CloudFormation no crea parámetros SecureString, así que un recurso personalizado genera las claves (panel y chat)
+# al desplegar (nunca aparecen en la plantilla) y las borra al destruir el stack. Parameter Store estándar no cuesta.
+# Si el parámetro ya existe no lo toca: un redespliegue no cambia las claves.
+CODIGO_CLAVES = """
 import secrets
 import boto3
 
 ssm = boto3.client("ssm")
+# Sin 0/O ni 1/I/L: el código del chat se dicta o se escribe en el celular.
+ALFABETO_CODIGO = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+
+def nueva_clave(formato):
+    if formato == "codigo":
+        return "".join(secrets.choice(ALFABETO_CODIGO) for _ in range(10))
+    return secrets.token_urlsafe(18)
 
 
 def handler(evento, _contexto):
-    nombre = evento["ResourceProperties"]["Nombre"]
+    props = evento["ResourceProperties"]
+    nombre = props["Nombre"]
     if evento["RequestType"] == "Delete":
         try:
             ssm.delete_parameter(Name=nombre)
@@ -45,8 +55,8 @@ def handler(evento, _contexto):
             pass
     else:
         try:
-            ssm.put_parameter(Name=nombre, Type="SecureString", Value=secrets.token_urlsafe(18), Overwrite=False,
-                              Description="Clave del panel del taller (demo)")
+            ssm.put_parameter(Name=nombre, Type="SecureString", Value=nueva_clave(props.get("Formato")),
+                              Overwrite=False, Description=props.get("Descripcion", "Clave del taller (demo)"))
         except ssm.exceptions.ParameterAlreadyExists:
             pass
     return {"PhysicalResourceId": nombre}
@@ -154,26 +164,35 @@ class TallerStack(Stack):
         version_guardrail = bedrock.CfnGuardrailVersion(self, "GuardrailVersion",
                                                          guardrail_identifier=guardrail.attr_guardrail_id)
 
-        # ---------- clave del panel (SSM Parameter Store, SecureString) ----------
+        # ---------- claves del panel y del chat (SSM Parameter Store, SecureString) ----------
         # Sin "/" inicial: así el comando de salida funciona igual en Git Bash (no convierte rutas).
         parametro_panel = f"{construct_id}-clave-panel"
-        parametro_panel_arn = f"arn:aws:ssm:{self.region}:{self.account}:parameter/{parametro_panel}"
-        generador_clave = lambda_.Function(
+        parametro_chat = f"{construct_id}-clave-chat"
+
+        def arn_parametro(nombre: str) -> str:
+            return f"arn:aws:ssm:{self.region}:{self.account}:parameter/{nombre}"
+
+        # Los IDs "...ClavePanel" vienen de cuando solo existía esa clave. No los cambies: CloudFormation no permite
+        # modificar el ServiceToken de un recurso personalizado ya creado y el despliegue fallaría.
+        generador_claves = lambda_.Function(
             self, "GeneradorClavePanel",
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="index.handler",
-            code=lambda_.Code.from_inline(CODIGO_CLAVE_PANEL),
+            code=lambda_.Code.from_inline(CODIGO_CLAVES),
             timeout=Duration.seconds(30),
             log_group=logs.LogGroup(self, "GeneradorClavePanelLogs", retention=logs.RetentionDays.ONE_WEEK,
                                     removal_policy=RemovalPolicy.DESTROY),
         )
-        generador_clave.add_to_role_policy(iam.PolicyStatement(
-            actions=["ssm:PutParameter", "ssm:DeleteParameter"], resources=[parametro_panel_arn]))
-        clave_panel = CustomResource(
-            self, "ClavePanelParametro",
-            service_token=cr.Provider(self, "ProveedorClavePanel", on_event_handler=generador_clave).service_token,
-            properties={"Nombre": parametro_panel},
-        )
+        generador_claves.add_to_role_policy(iam.PolicyStatement(
+            actions=["ssm:PutParameter", "ssm:DeleteParameter"],
+            resources=[arn_parametro(parametro_panel), arn_parametro(parametro_chat)]))
+        proveedor_claves = cr.Provider(self, "ProveedorClavePanel", on_event_handler=generador_claves).service_token
+        clave_panel = CustomResource(self, "ClavePanelParametro", service_token=proveedor_claves,
+                                     properties={"Nombre": parametro_panel,
+                                                 "Descripcion": "Clave del panel del taller (demo)"})
+        clave_chat = CustomResource(self, "ClaveChatParametro", service_token=proveedor_claves,
+                                    properties={"Nombre": parametro_chat, "Formato": "codigo",
+                                                "Descripcion": "Código de acceso al chat del taller (demo)"})
 
         # ---------- Lambdas ----------
         codigo = lambda_.Code.from_asset(
@@ -226,7 +245,8 @@ class TallerStack(Stack):
         worker_fn.add_environment("SCHEDULER_ROLE_ARN", rol_scheduler.role_arn)
         api_fn.add_environment("WORKER_FUNCTION", worker_fn.function_name)
         api_fn.add_environment("PANEL_PARAMETRO", parametro_panel)
-        api_fn.node.add_dependency(clave_panel)
+        api_fn.add_environment("CHAT_PARAMETRO", parametro_chat)
+        api_fn.node.add_dependency(clave_panel, clave_chat)
         api_fn.add_environment("RECORDATORIO_FUNCTION_ARN", recordatorio_fn.function_arn)
 
         # permisos mínimos por función
@@ -240,7 +260,8 @@ class TallerStack(Stack):
         fotos.grant_read(api_fn)
         worker_fn.grant_invoke(api_fn)
         # La llave administrada aws/ssm ya permite descifrar vía SSM a quien tenga ssm:GetParameter en la cuenta.
-        api_fn.add_to_role_policy(iam.PolicyStatement(actions=["ssm:GetParameter"], resources=[parametro_panel_arn]))
+        api_fn.add_to_role_policy(iam.PolicyStatement(
+            actions=["ssm:GetParameter"], resources=[arn_parametro(parametro_panel), arn_parametro(parametro_chat)]))
 
         # Converse usa el permiso bedrock:InvokeModel. Un perfil de inferencia ("us.", "global.") enruta a varias
         # regiones, así que se permite el perfil y el modelo base en cualquier región, solo para los modelos configurados.
@@ -274,7 +295,7 @@ class TallerStack(Stack):
             cors_preflight=apigw.CorsPreflightOptions(
                 allow_origins=origenes,
                 allow_methods=[apigw.CorsHttpMethod.GET, apigw.CorsHttpMethod.POST],
-                allow_headers=["content-type", "x-panel-key"],
+                allow_headers=["content-type", "x-panel-key", "x-chat-key"],
                 max_age=Duration.hours(1),
             ),
         )
@@ -300,6 +321,6 @@ class TallerStack(Stack):
         CfnOutput(self, "ChatUrl", value=origen_sitio)
         CfnOutput(self, "PanelUrl", value=f"{origen_sitio}/panel.html")
         CfnOutput(self, "ApiUrl", value=api.api_endpoint)
-        CfnOutput(self, "PanelKeyCommand",
-                  value=f"aws ssm get-parameter --name {parametro_panel} --with-decryption "
-                        f"--region {self.region} --query Parameter.Value --output text")
+        for salida, parametro in (("PanelKeyCommand", parametro_panel), ("ChatKeyCommand", parametro_chat)):
+            CfnOutput(self, salida, value=f"aws ssm get-parameter --name {parametro} --with-decryption "
+                                          f"--region {self.region} --query Parameter.Value --output text")

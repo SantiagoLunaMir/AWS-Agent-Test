@@ -9,9 +9,17 @@ const config = await fetch("config.json", { cache: "no-store" }).then((r) => r.j
 const API = config.apiUrl.replace(/\/$/, "");
 const POLL_MS = 2000;
 
+// El enlace del taller trae el código de acceso en el fragmento (#clave=...), que el navegador no envía al servidor.
+const claveEnlace = new URLSearchParams(location.hash.slice(1)).get("clave");
+if (claveEnlace) {
+  localStorage.setItem("tallerchat.clave", claveEnlace.trim());
+  history.replaceState(null, "", location.pathname + location.search);
+}
+
 const estado = {
   sessionId: localStorage.getItem("tallerchat.session") || crypto.randomUUID(),
   cliente: JSON.parse(localStorage.getItem("tallerchat.cliente") || "null"),
+  clave: localStorage.getItem("tallerchat.clave") || "",
   desde: "",
   vistos: new Set(),
   pensando: false,
@@ -47,8 +55,13 @@ function hora(iso) {
 async function api(ruta, opciones = {}) {
   const r = await fetch(`${API}${ruta}`, {
     ...opciones,
-    headers: { "content-type": "application/json", ...(opciones.headers || {}) },
+    headers: { "content-type": "application/json", "x-chat-key": estado.clave, ...(opciones.headers || {}) },
   });
+  if (r.status === 401) {
+    estado.clave = "";
+    localStorage.removeItem("tallerchat.clave");
+    pedirRegistro("El código de acceso no es válido. Pídelo a quien organiza el taller.");
+  }
   const cuerpo = await r.json().catch(() => ({}));
   if (!r.ok) throw Object.assign(new Error(cuerpo.error || `Error ${r.status}`), { status: r.status });
   return cuerpo;
@@ -119,6 +132,10 @@ function mostrarEscribiendo(activo) {
 
 // ---------- sondeo de mensajes nuevos (simula las notificaciones push) ----------
 async function sondear() {
+  if (!estado.clave || ui.registro.open) {
+    setTimeout(sondear, POLL_MS);
+    return;
+  }
   try {
     const q = new URLSearchParams({ session_id: estado.sessionId });
     if (estado.desde) q.set("desde", estado.desde);
@@ -222,14 +239,23 @@ $("nueva").addEventListener("click", () => {
   location.reload();
 });
 
-// ---------- registro de identidad simulada ----------
+// ---------- registro de identidad simulada y código de acceso ----------
+function pedirRegistro(error = "") {
+  $("registroError").textContent = error;
+  $("registroError").hidden = !error;
+  $("nombre").value = estado.cliente?.nombre || "";
+  $("telefono").value = estado.cliente?.telefono || "";
+  $("codigo").value = estado.clave;
+  if (!ui.registro.open) ui.registro.showModal();
+}
+
 $("registroForm").addEventListener("submit", () => {
   estado.cliente = { nombre: $("nombre").value.trim(), telefono: $("telefono").value.trim() };
+  estado.clave = $("codigo").value.trim();
   localStorage.setItem("tallerchat.cliente", JSON.stringify(estado.cliente));
+  localStorage.setItem("tallerchat.clave", estado.clave);
 });
+ui.registro.addEventListener("cancel", (e) => e.preventDefault());
 
-if (!estado.cliente) {
-  ui.registro.showModal();
-  ui.registro.addEventListener("cancel", (e) => e.preventDefault());
-}
+if (!estado.cliente || !estado.clave) pedirRegistro();
 sondear();

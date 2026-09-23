@@ -24,8 +24,12 @@ GUARDRAIL_ID = os.environ.get("GUARDRAIL_ID", "")
 GUARDRAIL_VERSION = os.environ.get("GUARDRAIL_VERSION", "DRAFT")
 
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "")
-# Parámetro SecureString de SSM Parameter Store (gratis, a diferencia de Secrets Manager) con la clave del panel.
+# Parámetros SecureString de SSM Parameter Store (gratis, a diferencia de Secrets Manager) con la clave del panel
+# y el código de acceso del chat. Sin parámetro configurado, la ruta rechaza todo (401).
 PANEL_PARAMETRO = os.environ.get("PANEL_PARAMETRO", "")
+CHAT_PARAMETRO = os.environ.get("CHAT_PARAMETRO", "")
+# Cada cuánto se vuelven a leer las claves: una clave rotada en Parameter Store aplica sin redesplegar.
+SEGUNDOS_CACHE_CLAVES = 300
 
 MAX_PASOS_AGENTE = 8
 MAX_TEXTO = 1000

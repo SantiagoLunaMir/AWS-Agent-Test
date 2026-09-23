@@ -151,6 +151,7 @@ dialog form { padding: 24px; display: grid; gap: 14px; }
 dialog h2 { margin: 0; font-size: 20px; }
 dialog p { margin: 0; color: var(--muted); font-size: 14px; }
 dialog label { display: grid; gap: 6px; font-size: 14px; }
+dialog p.error { color: #d93025; font-weight: 600; }
 dialog input { font: inherit; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); }
 dialog button { font: inherit; font-weight: 600; padding: 11px; border: 0; border-radius: 22px; background: var(--accent); color: #fff; cursor: pointer; }
 

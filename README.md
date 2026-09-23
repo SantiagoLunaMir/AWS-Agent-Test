@@ -17,7 +17,7 @@ Un cliente escribe en un chat **con estilo de app de mensajería** y un agente d
 ```mermaid
 flowchart LR
     C[Cliente<br/>chat web estilo mensajería] -->|HTTPS| CF[CloudFront + S3<br/>sitio estático]
-    C -->|POST /chat · /fotos| API[API Gateway HTTP API<br/>con throttling]
+    C -->|POST /chat · /fotos<br/>x-chat-key| API[API Gateway HTTP API<br/>con throttling]
     C -->|foto con URL prefirmada| S3F[(S3 fotos<br/>expiran en 7 días)]
     API --> L1[Lambda API]
     L1 -->|invocación asíncrona| L2[Lambda Agente]
@@ -30,13 +30,13 @@ flowchart LR
     T -.->|opcional| SES[Amazon SES]
     SCH --> L3[Lambda Recordatorio] --> DDB
     P[Panel del taller] -->|x-panel-key| API
-    L1 --> SM[SSM Parameter Store<br/>clave del panel]
+    L1 --> SM[SSM Parameter Store<br/>clave del panel y código del chat]
 ```
 
 | Pieza | Servicio | Qué hace |
 |---|---|---|
 | Chat y panel | S3 + CloudFront | HTML/JS estático, sin build |
-| Entrada | API Gateway HTTP API + Lambda | Valida, limita el ritmo y encola cada turno |
+| Entrada | API Gateway HTTP API + Lambda | Revisa el código de acceso, valida, limita el ritmo y encola cada turno |
 | Agente | Lambda + **Amazon Nova 2 Lite en Bedrock** (API Converse con `boto3`) | Loop de razonamiento con herramientas |
 | Visión | Nova 2 Lite con una herramienta forzada (JSON por esquema) | Clasifica el vehículo de la foto |
 | Seguridad | **Bedrock Guardrails** (`ApplyGuardrail`) | Filtros de contenido, ataques de prompt, tema denegado (fraude vehicular), bloqueo de tarjetas y contraseñas |
@@ -75,19 +75,20 @@ Herramientas (`backend/taller/herramientas.py`). Nova 2 Lite no tiene modo `stri
 - **La foto nunca entra a la conversación del agente.** Un clasificador aislado la convierte en un JSON con esquema fijo y campos truncados. Un texto escrito dentro de la imagen no puede darle instrucciones al agente.
 - **Humano en el ciclo.** El cliente confirma la marca y el horario. Sin esa confirmación, las herramientas rechazan la acción.
 - **Bedrock Guardrails** en la entrada y en la salida.
-- **Límites de uso.** Throttling en API Gateway, 20 mensajes cada 10 minutos por conversación, fotos de 5 MB como máximo y URL prefirmada de 5 minutos.
+- **Chat con código de acceso.** `/chat`, `/mensajes` y `/fotos` responden 401 sin el código correcto (cabecera `x-chat-key`), así que nadie fuera del taller puede gastar tus créditos de Bedrock con solo encontrar la URL. Ver [Compartir el chat](#compartir-el-chat-código-de-acceso).
+- **Límites de uso.** Throttling en API Gateway (10 peticiones por segundo, ráfagas de 20), 20 mensajes cada 10 minutos por conversación, fotos de 5 MB como máximo y URL prefirmada de 5 minutos.
 - **Retención mínima.** Las conversaciones y los mensajes expiran en 7 días (TTL) y las fotos también (ciclo de vida de S3).
-- **Panel protegido** con una clave cifrada en SSM Parameter Store (`SecureString`). Un recurso personalizado la genera al desplegar, así que nunca aparece en la plantilla. Se usa Parameter Store y no Secrets Manager porque el nivel estándar no cuesta nada.
+- **Panel protegido** con una clave cifrada en SSM Parameter Store (`SecureString`). Un recurso personalizado genera esa clave y el código del chat al desplegar, así que nunca aparecen en la plantilla. Se usa Parameter Store y no Secrets Manager porque el nivel estándar no cuesta nada.
 - **Mínimo privilegio.** Cada Lambda recibe solo los permisos que usa.
 
-Qué faltaría para producción: autenticación real (por ejemplo, Cognito), verificación del número de teléfono, cifrado con KMS propio, WAF, revisión legal del manejo de datos personales, pruebas de carga y evaluaciones (evals) del agente.
+Qué faltaría para producción: autenticación real por usuario (por ejemplo, Cognito) en lugar de un código compartido, verificación del número de teléfono, cifrado con KMS propio, WAF, revisión legal del manejo de datos personales, pruebas de carga y evaluaciones (evals) del agente.
 
 ## Modelo: Amazon Nova 2 Lite
 
 El agente y el clasificador de fotos usan **Amazon Nova 2 Lite** (`us.amazon.nova-2-lite-v1:0`) mediante la **API Converse** de Bedrock:
 
 - **No pide formulario** de caso de uso y funciona en cuentas con el *Free plan* de AWS.
-- **Es barato:** USD 0.33 por millón de tokens de entrada y 2.75 de salida (us-east-2). Una conversación completa hasta agendar cuesta alrededor de un centavo de dólar.
+- **Es barato:** USD 0.33 por millón de tokens de entrada y 2.75 de salida (us-east-2). Una conversación completa hasta agendar cuesta entre 1 y 2 centavos de dólar, contando el Guardrail.
 - **Acepta imágenes**, así que un solo modelo cubre el chat y la foto.
 - **Caché del prompt:** el prompt fijo (instrucciones y catálogo de skills) se marca con `cachePoint` y se cobra más barato en cada turno.
 - **Razonamiento extendido** opcional (`-c razonamiento=low|medium|high`). Su contenido llega censurado y no se guarda en el historial.
@@ -127,7 +128,29 @@ Al terminar, CDK imprime:
 
 - `ChatUrl`: el chat del cliente.
 - `PanelUrl`: el panel del taller.
+- `ApiUrl`: el API (lo usan los scripts de prueba).
+- `ChatKeyCommand`: el comando para obtener el código de acceso del chat.
 - `PanelKeyCommand`: el comando para obtener la clave del panel.
+
+### Compartir el chat (código de acceso)
+
+El chat pide un **código de acceso** además del nombre y el teléfono ficticios. Lo más cómodo es repartir un enlace que ya lo trae:
+
+```bash
+aws ssm get-parameter --name TallerAgente-clave-chat --with-decryption --region us-east-2 --query Parameter.Value --output text
+# enlace para los asistentes: <ChatUrl>/#clave=<código>
+```
+
+- El código va después de `#`: el navegador no lo manda al servidor, así que no queda en los logs de CloudFront. El chat lo guarda en el navegador y lo quita de la barra de direcciones.
+- Son 10 caracteres en mayúsculas y números, sin 0/O ni 1/I/L, por si hay que dictarlo.
+- Para **cortar el acceso** (por ejemplo, al terminar el taller), cambia el código. Aplica en unos 5 minutos, sin volver a desplegar, y quien tenga el anterior verá de nuevo la pantalla que lo pide:
+
+  ```bash
+  python -c "import secrets; print(''.join(secrets.choice('ABCDEFGHJKMNPQRSTUVWXYZ23456789') for _ in range(10)))"
+  aws ssm put-parameter --name TallerAgente-clave-chat --type SecureString --overwrite --region us-east-2 --value <código-nuevo>
+  ```
+
+- Un nuevo `cdk deploy` no cambia el código ni la clave del panel. `cdk destroy` los borra.
 
 ### Parámetros opcionales (`-c clave=valor`)
 
@@ -162,7 +185,7 @@ Crea `frontend/config.json` con la URL del API (este archivo está en `.gitignor
 { "apiUrl": "https://xxxx.execute-api.us-east-2.amazonaws.com" }
 ```
 
-Después ejecuta `python -m http.server 8000 -d frontend` y abre `http://localhost:8000`. El API ya permite ese origen.
+Después ejecuta `python -m http.server 8000 -d frontend` y abre `http://localhost:8000/#clave=<código>`. El API ya permite ese origen.
 
 ## Costos y limpieza
 
@@ -173,8 +196,8 @@ El stack no tiene costos fijos mensuales: sin tráfico cuesta prácticamente cer
 | Lambda, CloudFront, EventBridge Scheduler, CloudWatch Logs | Always Free (con sus límites mensuales) | Nada en una demo |
 | SSM Parameter Store (nivel estándar) | Sin costo | Nada |
 | DynamoDB (on-demand) | Almacenamiento Always Free (25 GB) | Peticiones por uso: fracciones de centavo en una demo |
-| Bedrock (Nova 2 Lite) y Bedrock Guardrails | No | Por uso: alrededor de un centavo de dólar por conversación completa |
-| API Gateway HTTP API | No | Por uso: USD 1 por millón de peticiones |
+| Bedrock (Nova 2 Lite) y Bedrock Guardrails | No | Por uso: entre 1 y 2 centavos de dólar por conversación completa |
+| API Gateway HTTP API | No | Por uso: USD 1 por millón de peticiones. El chat consulta mensajes nuevos cada 2 s mientras está abierto (≈1,800 peticiones por hora por pestaña) |
 | S3 (sitio, fotos y artefactos de CDK) | No | Almacenamiento: fracciones de centavo al mes (las fotos expiran en 7 días) |
 
 El log de la Lambda del agente registra los tokens de cada llamada (`tokens entrada=… salida=… cache_leidos=…`). Para borrar todo:

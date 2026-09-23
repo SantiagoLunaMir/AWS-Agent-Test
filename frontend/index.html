@@ -66,8 +66,10 @@
     <form method="dialog" id="registroForm">
       <h2>Bienvenido a TallerChat</h2>
       <p>Simula tu identidad de mensajería. Usa datos ficticios.</p>
+      <p class="error" id="registroError" hidden></p>
       <label>Nombre<input id="nombre" required maxlength="60" autocomplete="off" placeholder="Ana López"></label>
       <label>Teléfono (ficticio)<input id="telefono" required pattern="\+?[0-9 ]{8,16}" autocomplete="off" placeholder="55 1234 5678"></label>
+      <label>Código de acceso<input id="codigo" required maxlength="64" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Te lo da quien organiza el taller"></label>
       <button type="submit">Empezar</button>
     </form>
   </dialog>
