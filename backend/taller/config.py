@@ -30,6 +30,8 @@ PANEL_PARAMETRO = os.environ.get("PANEL_PARAMETRO", "")
 CHAT_PARAMETRO = os.environ.get("CHAT_PARAMETRO", "")
 # Cada cuánto se vuelven a leer las claves: una clave rotada en Parameter Store aplica sin redesplegar.
 SEGUNDOS_CACHE_CLAVES = 300
+# URL pública del chat (CloudFront), para el enlace con código que el panel muestra en "Compartir chat".
+CHAT_URL = os.environ.get("CHAT_URL", "")
 
 MAX_PASOS_AGENTE = 8
 MAX_TEXTO = 1000

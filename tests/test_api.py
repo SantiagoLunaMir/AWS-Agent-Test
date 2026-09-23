@@ -118,3 +118,18 @@ def test_clave_rotada_aplica_al_vencer_la_cache(api):
     handler._claves["Taller-clave-chat"] = (valor, 0.0)  # la caché venció
     assert post_chat(base())["statusCode"] == 401
     assert post_chat(base(), clave="NUEVA23456")["statusCode"] == 202
+
+
+def test_panel_comparte_el_chat_con_codigo_y_qr(api, monkeypatch):
+    boto3.client("ssm", region_name="us-east-2").put_parameter(Name="Taller-clave-panel", Value="panel-demo",
+                                                               Type="SecureString")
+    monkeypatch.setattr(config, "PANEL_PARAMETRO", "Taller-clave-panel")
+    monkeypatch.setattr(config, "CHAT_URL", "https://chat.ejemplo.net/")
+    evento = {"routeKey": "GET /panel/chat"}
+    assert handler.api({**evento, "headers": {"x-panel-key": CLAVE_CHAT}}, None)["statusCode"] == 401, \
+        "el código del chat no abre el panel"
+    r = handler.api({**evento, "headers": {"x-panel-key": "panel-demo"}}, None)
+    datos = json.loads(r["body"])
+    assert r["statusCode"] == 200 and datos["codigo"] == CLAVE_CHAT
+    assert datos["enlace"] == f"https://chat.ejemplo.net/#clave={CLAVE_CHAT}"
+    assert datos["qr"].startswith("data:image/svg+xml")

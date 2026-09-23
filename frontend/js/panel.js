@@ -10,6 +10,13 @@ const SERVICIOS = {
 
 const hoyLocal = () => new Date().toLocaleDateString("en-CA");
 let fecha = hoyLocal();
+// Entrada por enlace (panel.html#clave=...): el fragmento no llega al servidor y se borra de la barra.
+const claveEnlace = new URLSearchParams(location.hash.slice(1)).get("clave");
+if (claveEnlace) {
+  sessionStorage.setItem("panel.clave", claveEnlace.trim());
+  history.replaceState(null, "", location.pathname + location.search);
+}
+window.addEventListener("hashchange", () => { if (location.hash.includes("clave=")) location.reload(); });
 let clave = sessionStorage.getItem("panel.clave") || "";
 
 function el(tag, props = {}, ...hijos) {
@@ -129,6 +136,29 @@ $("fecha").addEventListener("change", (e) => { fecha = e.target.value || hoyLoca
 $("anterior").addEventListener("click", () => moverDia(-1));
 $("siguiente").addEventListener("click", () => moverDia(1));
 $("hoy").addEventListener("click", () => { fecha = hoyLocal(); cargar(); });
+
+// ---------- compartir el chat (enlace con código de acceso + QR) ----------
+$("compartir").addEventListener("click", async () => {
+  try {
+    const { codigo, enlace, qr } = await api("/panel/chat");
+    $("qr").src = qr;
+    $("codigoChat").textContent = codigo;
+    $("enlaceChat").value = enlace;
+    $("copiar").textContent = "Copiar enlace";
+    $("compartirDialog").showModal();
+  } catch (e) {
+    if (e.message !== "Clave inválida") alert(e.message);
+  }
+});
+$("copiar").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText($("enlaceChat").value);
+    $("copiar").textContent = "¡Copiado!";
+  } catch {
+    $("enlaceChat").select();
+    $("copiar").textContent = "Cópialo con Ctrl+C";
+  }
+});
 
 cargar();
 setInterval(() => { if (!document.hidden && clave) cargar(); }, REFRESCO_MS);

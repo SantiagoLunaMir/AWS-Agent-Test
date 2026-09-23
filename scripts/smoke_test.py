@@ -122,6 +122,9 @@ def main() -> int:
         r = requests.get(f"{api}/panel/citas", params={"fecha": manana}, headers={"x-panel-key": clave_panel},
                          timeout=15)
         paso("panel con clave (200)", r.status_code == 200)
+        compartir = requests.get(f"{api}/panel/chat", headers={"x-panel-key": clave_panel}, timeout=15)
+        paso("panel comparte el enlace del chat", compartir.status_code == 200
+             and compartir.json()["enlace"].endswith(f"#clave={clave_chat}"))
         if args.flujo:
             mias = [c for c in r.json()["citas"] if c["telefono"] == telefono and c["estado"] == "confirmada"]
             if not mias:

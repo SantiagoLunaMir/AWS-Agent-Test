@@ -75,10 +75,10 @@ Herramientas (`backend/taller/herramientas.py`). Nova 2 Lite no tiene modo `stri
 - **La foto nunca entra a la conversación del agente.** Un clasificador aislado la convierte en un JSON con esquema fijo y campos truncados. Un texto escrito dentro de la imagen no puede darle instrucciones al agente.
 - **Humano en el ciclo.** El cliente confirma la marca y el horario. Sin esa confirmación, las herramientas rechazan la acción.
 - **Bedrock Guardrails** en la entrada y en la salida.
-- **Chat con código de acceso.** `/chat`, `/mensajes` y `/fotos` responden 401 sin el código correcto (cabecera `x-chat-key`), así que nadie fuera del taller puede gastar tus créditos de Bedrock con solo encontrar la URL. Ver [Compartir el chat](#compartir-el-chat-código-de-acceso).
+- **Chat con código de acceso.** `/chat`, `/mensajes` y `/fotos` responden 401 sin el código correcto (cabecera `x-chat-key`), así que nadie fuera del taller puede gastar tus créditos de Bedrock con solo encontrar la URL. Ver [Enlaces del chat y del panel](#enlaces-del-chat-y-del-panel-códigos-de-acceso).
 - **Límites de uso.** Throttling en API Gateway (10 peticiones por segundo, ráfagas de 20), 20 mensajes cada 10 minutos por conversación, fotos de 5 MB como máximo y URL prefirmada de 5 minutos.
 - **Retención mínima.** Las conversaciones y los mensajes expiran en 7 días (TTL) y las fotos también (ciclo de vida de S3).
-- **Panel protegido** con una clave cifrada en SSM Parameter Store (`SecureString`). Un recurso personalizado genera esa clave y el código del chat al desplegar, así que nunca aparecen en la plantilla. Se usa Parameter Store y no Secrets Manager porque el nivel estándar no cuesta nada.
+- **Panel protegido** con su propia clave, distinta del código del chat, cifrada en SSM Parameter Store (`SecureString`). Un recurso personalizado genera esa clave y el código del chat al desplegar, así que nunca aparecen en la plantilla. Se usa Parameter Store y no Secrets Manager porque el nivel estándar no cuesta nada.
 - **Mínimo privilegio.** Cada Lambda recibe solo los permisos que usa.
 
 Qué faltaría para producción: autenticación real por usuario (por ejemplo, Cognito) en lugar de un código compartido, verificación del número de teléfono, cifrado con KMS propio, WAF, revisión legal del manejo de datos personales, pruebas de carga y evaluaciones (evals) del agente.
@@ -130,20 +130,34 @@ Al terminar, CDK imprime:
 - `PanelUrl`: el panel del taller.
 - `ApiUrl`: el API (lo usan los scripts de prueba).
 - `ChatKeyCommand`: el comando para obtener el código de acceso del chat.
-- `PanelKeyCommand`: el comando para obtener la clave del panel.
+- `PanelKeyCommand`: el comando para obtener la clave del panel. Los enlaces listos para usar se arman como se explica abajo.
 
-### Compartir el chat (código de acceso)
+### Enlaces del chat y del panel (códigos de acceso)
 
-El chat pide un **código de acceso** además del nombre y el teléfono ficticios. Lo más cómodo es repartir un enlace que ya lo trae:
+El chat pide un **código de acceso** además del nombre y el teléfono ficticios, y el panel pide su propia **clave**. Los dos se pueden pasar en el enlace, después de `#clave=`. Estos comandos imprimen ambos enlaces completos:
 
 ```bash
-aws ssm get-parameter --name TallerAgente-clave-chat --with-decryption --region us-east-2 --query Parameter.Value --output text
-# enlace para los asistentes: <ChatUrl>/#clave=<código>
+# Git Bash, Linux o macOS
+CHAT_URL=$(aws cloudformation describe-stacks --stack-name TallerAgente --region us-east-2 --query "Stacks[0].Outputs[?OutputKey=='ChatUrl'].OutputValue" --output text)
+
+# 1. Enlace del chat para los asistentes (lleva el código de acceso)
+echo "$CHAT_URL/#clave=$(aws ssm get-parameter --name TallerAgente-clave-chat --with-decryption --region us-east-2 --query Parameter.Value --output text)"
+
+# 2. Enlace del panel, solo para quien atiende el taller (no lo proyectes ni lo compartas)
+echo "$CHAT_URL/panel.html#clave=$(aws ssm get-parameter --name TallerAgente-clave-panel --with-decryption --region us-east-2 --query Parameter.Value --output text)"
 ```
 
-- El código va después de `#`: el navegador no lo manda al servidor, así que no queda en los logs de CloudFront. El chat lo guarda en el navegador y lo quita de la barra de direcciones.
-- Son 10 caracteres en mayúsculas y números, sin 0/O ni 1/I/L, por si hay que dictarlo.
-- Para **cortar el acceso** (por ejemplo, al terminar el taller), cambia el código. Aplica en unos 5 minutos, sin volver a desplegar, y quien tenga el anterior verá de nuevo la pantalla que lo pide:
+```powershell
+# PowerShell
+$CHAT_URL = aws cloudformation describe-stacks --stack-name TallerAgente --region us-east-2 --query "Stacks[0].Outputs[?OutputKey=='ChatUrl'].OutputValue" --output text
+"$CHAT_URL/#clave=$(aws ssm get-parameter --name TallerAgente-clave-chat --with-decryption --region us-east-2 --query Parameter.Value --output text)"
+"$CHAT_URL/panel.html#clave=$(aws ssm get-parameter --name TallerAgente-clave-panel --with-decryption --region us-east-2 --query Parameter.Value --output text)"
+```
+
+- **Sin terminal:** en el panel, el botón **Compartir chat** muestra el enlace del chat, el código en grande y un **QR** para proyectarlo. Solo lo ve quien entró con la clave del panel.
+- Lo que va después de `#` no se manda al servidor, así que no queda en los logs de CloudFront. El chat y el panel guardan la clave en el navegador y la quitan de la barra de direcciones.
+- El código del chat son 10 caracteres en mayúsculas y números, sin 0/O ni 1/I/L, por si hay que dictarlo. Si alguien lo escribe mal, el chat lo vuelve a pedir.
+- Para **cortar el acceso al chat** (por ejemplo, al terminar el taller), cambia el código. Aplica en unos 5 minutos, sin volver a desplegar, y quien tenga el anterior verá de nuevo la pantalla que lo pide. La clave del panel se rota igual, con `TallerAgente-clave-panel`:
 
   ```bash
   python -c "import secrets; print(''.join(secrets.choice('ABCDEFGHJKMNPQRSTUVWXYZ23456789') for _ in range(10)))"

@@ -246,6 +246,7 @@ class TallerStack(Stack):
         api_fn.add_environment("WORKER_FUNCTION", worker_fn.function_name)
         api_fn.add_environment("PANEL_PARAMETRO", parametro_panel)
         api_fn.add_environment("CHAT_PARAMETRO", parametro_chat)
+        api_fn.add_environment("CHAT_URL", origen_sitio)
         api_fn.node.add_dependency(clave_panel, clave_chat)
         api_fn.add_environment("RECORDATORIO_FUNCTION_ARN", recordatorio_fn.function_arn)
 
@@ -302,7 +303,7 @@ class TallerStack(Stack):
         integracion = integraciones.HttpLambdaIntegration("ApiIntegracion", api_fn)
         for metodo, ruta in [("POST", "/chat"), ("GET", "/mensajes"), ("POST", "/fotos"),
                              ("GET", "/panel/citas"), ("POST", "/panel/citas/{cita_id}/estado"),
-                             ("GET", "/panel/foto")]:
+                             ("GET", "/panel/foto"), ("GET", "/panel/chat")]:
             api.add_routes(path=ruta, methods=[apigw.HttpMethod(metodo)], integration=integracion)
         etapa = api.default_stage.node.default_child
         etapa.default_route_settings = apigw.CfnStage.RouteSettingsProperty(

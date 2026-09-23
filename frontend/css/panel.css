@@ -88,3 +88,10 @@ dialog button { font: inherit; font-weight: 600; padding: 10px; border: 0; borde
   .top, main { padding-left: 16px; padding-right: 16px; }
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+.compartir { justify-items: center; text-align: center; }
+.compartir img { width: min(320px, 70vw); height: auto; border-radius: 8px; background: #fff; }
+.compartir .codigo { font-size: 18px; }
+.compartir .codigo b { font-family: ui-monospace, Consolas, monospace; font-size: 26px; letter-spacing: 3px; }
+.compartir input { width: 100%; box-sizing: border-box; font-size: 13px; }
+.compartir .botones { display: flex; gap: 8px; }
+.compartir .nota { font-size: 12px; }

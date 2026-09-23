@@ -7,9 +7,11 @@ import time
 import uuid
 from datetime import datetime
 from functools import lru_cache
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import boto3
+import segno
 from botocore.config import Config
 
 from . import agenda, agente, config, guard, herramientas, notificaciones, store
@@ -88,6 +90,8 @@ def api(evento, _contexto):
                 return panel_cambiar_estado(evento["pathParameters"]["cita_id"], _json(evento))
             if ruta == "GET /panel/foto":
                 return panel_foto(evento.get("queryStringParameters") or {})
+            if ruta == "GET /panel/chat":
+                return panel_compartir_chat()
         return _resp(404, {"error": "Ruta no encontrada."})
     except Exception:
         log.exception("Error en %s", ruta)
@@ -194,6 +198,16 @@ def panel_foto(params: dict):
     url = _cliente("s3").generate_presigned_url("get_object", Params={"Bucket": config.BUCKET_FOTOS, "Key": key},
                                                 ExpiresIn=300)
     return _resp(200, {"url": url})
+
+
+def panel_compartir_chat():
+    """Enlace del chat con el código de acceso y su QR, para proyectarlo en el taller. Solo con la clave del panel."""
+    if not config.CHAT_PARAMETRO:
+        return _resp(409, {"error": "El chat no tiene código de acceso configurado."})
+    codigo = _clave(config.CHAT_PARAMETRO)
+    enlace = f"{config.CHAT_URL.rstrip('/')}/#clave={quote(codigo, safe='')}"
+    qr = segno.make(enlace, error="m").svg_data_uri(scale=8, border=2, dark="#111b21", light="#ffffff")
+    return _resp(200, {"codigo": codigo, "enlace": enlace, "qr": qr})
 
 
 # =================== Worker del agente ===================

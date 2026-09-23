@@ -15,6 +15,8 @@ if (claveEnlace) {
   localStorage.setItem("tallerchat.clave", claveEnlace.trim());
   history.replaceState(null, "", location.pathname + location.search);
 }
+// Abrir otro enlace con código en la misma pestaña solo cambia el fragmento: recarga para leerlo.
+window.addEventListener("hashchange", () => { if (location.hash.includes("clave=")) location.reload(); });
 
 const estado = {
   sessionId: localStorage.getItem("tallerchat.session") || crypto.randomUUID(),

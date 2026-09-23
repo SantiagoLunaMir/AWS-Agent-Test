@@ -17,6 +17,7 @@
       <input type="date" id="fecha" aria-label="Fecha">
       <button id="siguiente" aria-label="Día siguiente">›</button>
       <button id="hoy">Hoy</button>
+      <button id="compartir" title="Enlace y QR del chat para los asistentes">Compartir chat</button>
       <span class="live off" id="live">● en vivo</span>
     </div>
   </header>
@@ -46,9 +47,24 @@
   <dialog id="clave">
     <form method="dialog" id="claveForm">
       <h2>Acceso al panel</h2>
-      <p>Pega la clave del panel (salida <code>PanelKeyCommand</code> del despliegue).</p>
+      <p>Pega la clave del panel (salida <code>PanelKeyCommand</code> del despliegue) o entra con el enlace <code>panel.html#clave=&lt;clave&gt;</code>.</p>
       <input id="claveInput" type="password" required autocomplete="off">
       <button type="submit">Entrar</button>
+    </form>
+  </dialog>
+
+  <dialog id="compartirDialog">
+    <form method="dialog" class="compartir">
+      <h2>Compartir el chat</h2>
+      <p>Proyecta el QR o comparte el enlace: ya trae el código de acceso.</p>
+      <img id="qr" alt="Código QR con el enlace del chat">
+      <div class="codigo">Código: <b id="codigoChat"></b></div>
+      <input id="enlaceChat" readonly aria-label="Enlace del chat">
+      <div class="botones">
+        <button type="button" id="copiar">Copiar enlace</button>
+        <button type="submit">Cerrar</button>
+      </div>
+      <p class="nota">Para cortar el acceso al terminar, cambia el código en Parameter Store (README → Compartir el chat).</p>
     </form>
   </dialog>
 
