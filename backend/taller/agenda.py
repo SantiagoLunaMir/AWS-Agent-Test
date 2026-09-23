@@ -41,12 +41,19 @@ def origen_marca(marca: str) -> str:
     return "general"
 
 
+def fecha_legible(dia: date | str) -> str:
+    """'2026-09-28' -> 'lunes 28 de septiembre', para los mensajes que lee el cliente."""
+    if isinstance(dia, str):
+        dia = date.fromisoformat(dia)
+    return f"{DIAS[dia.weekday()]} {dia.day} de {MESES[dia.month - 1]}"
+
+
 def cuando_legible(momento: datetime, ahora: datetime) -> str:
     """Fecha en palabras para el modelo: evita que interprete mal un timestamp ISO."""
     minutos = round((momento - ahora).total_seconds() / 60)
     if minutos < 60:
         return f"en unos {max(minutos, 1)} minutos"
-    return f"el {DIAS[momento.weekday()]} {momento.day} de {MESES[momento.month - 1]} a las {momento:%H:%M}"
+    return f"el {fecha_legible(momento)} a las {momento:%H:%M}"
 
 
 def slots_del_dia(dia: date) -> list[str]:
@@ -89,6 +96,14 @@ def horarios_libres(dia: date, citas_del_dia: list[dict], ahora: datetime) -> li
         if len(ocupados.get(hora, set())) < len(MECANICOS):
             libres.append(hora)
     return libres
+
+
+def horarios_sugeridos(libres: list[str], maximo: int = 3) -> list[str]:
+    """Hasta `maximo` horarios repartidos en el día (mañana, mediodía, tarde) para no listar todos al cliente."""
+    if len(libres) <= maximo:
+        return libres
+    paso = (len(libres) - 1) / (maximo - 1)
+    return [libres[round(i * paso)] for i in range(maximo)]
 
 
 def elegir_mecanico(marca: str, hora: str, citas_del_dia: list[dict]) -> dict | None:

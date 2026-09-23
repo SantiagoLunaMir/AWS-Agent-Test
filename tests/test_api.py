@@ -19,6 +19,16 @@ def api(aws, monkeypatch):
     return invocaciones
 
 
+def test_recordatorio_con_fecha_legible(aws):
+    cita = {"cita_id": "C-DEMO01", "session_id": "s-1", "nombre": "Ana", "email": "", "fecha": "2026-09-28",
+            "hora": "14:00", "marca": "Bugatti", "modelo": "Veyron", "servicio": "cambio_aceite",
+            "mecanico_nombre": "Jorge Pérez", "estado": "confirmada", "telefono": "5512345678"}
+    store.guardar_cita(cita)
+    handler.recordatorio({"cita_id": "C-DEMO01"}, None)
+    texto = store.listar_mensajes("s-1")[0]["texto"]
+    assert "es el lunes 28 de septiembre a las 14:00" in texto and "2026-09-28" not in texto
+
+
 def post_chat(cuerpo):
     return handler.api({"routeKey": "POST /chat", "body": json.dumps(cuerpo)}, None)
 

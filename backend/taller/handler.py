@@ -168,7 +168,8 @@ def panel_cambiar_estado(cita_id: str, cuerpo: dict):
         herramientas.cancelar(cita)
         store.agregar_mensaje(cita["session_id"], "agente",
                               f"Hola {cita['nombre']}, el taller tuvo que *cancelar* tu cita {cita_id} del "
-                              f"{cita['fecha']} a las {cita['hora']}. Escríbeme y te ayudo a reagendar.")
+                              f"{agenda.fecha_legible(cita['fecha'])} a las {cita['hora']}. "
+                              "Escríbeme y te ayudo a reagendar.")
     else:
         store.actualizar_estado_cita(cita_id, "completada")
         notificaciones.cancelar_recordatorio(cita_id)
@@ -216,7 +217,8 @@ def recordatorio(evento, _contexto):
         return
     store.agregar_mensaje(
         cita["session_id"], "agente",
-        f"⏰ *Recordatorio*: {cita['nombre']}, tu cita {cita['cita_id']} es el {cita['fecha']} a las "
+        f"⏰ *Recordatorio*: {cita['nombre']}, tu cita {cita['cita_id']} es el "
+        f"{agenda.fecha_legible(cita['fecha'])} a las "
         f"{cita['hora']} para tu {cita['marca']} {cita['modelo']}. Te atiende {cita['mecanico_nombre']}. "
         "Si necesitas cancelar, responde aquí.")
     notificaciones.enviar_correo(cita.get("email"), f"Recordatorio de tu cita {cita['cita_id']}",

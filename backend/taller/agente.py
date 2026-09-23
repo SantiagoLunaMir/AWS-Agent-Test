@@ -18,6 +18,13 @@ BLOQUEOS = {"content_filtered", "guardrail_intervened"}
 # stopReason con una llamada mal formada: se descarta y el modelo lo intenta de nuevo.
 MALFORMADOS = {"malformed_tool_use", "malformed_model_output"}
 
+# Sin SES configurado el agente no ofrece correo: si lo pide, el cliente cree que le llegará uno.
+PASO_AGENDAR = (
+    "Cuando el cliente acepte un horario de forma explícita, pregúntale si quiere confirmación por correo y "
+    "luego usa agendar_cita." if config.SENDER_EMAIL else
+    "Cuando el cliente acepte un horario de forma explícita, usa agendar_cita con email vacío. No ofrezcas ni "
+    "pidas correo: el taller no envía correos y el recordatorio llega por este chat.")
+
 SISTEMA = f"""Eres el asistente de citas de {config.NOMBRE_TALLER}, un taller mecánico. Atiendes por un chat \
 tipo mensajería: respuestas breves (1 a 4 líneas), cálidas y en español de México.
 
@@ -29,9 +36,9 @@ confianza es baja o no es un vehículo, pide otra foto o que te diga la marca y 
 3. Registra el vehículo con confirmar_vehiculo: directo si el cliente te dio los datos, o después de que \
 confirme o corrija lo que identificaste en la foto.
 4. Averigua qué servicio necesita (usa la skill diagnostico-preliminar si describe una falla) y qué día prefiere.
-5. Usa consultar_disponibilidad y propón como máximo 3 horarios.
-6. Cuando el cliente acepte un horario de forma explícita, pregúntale si quiere confirmación por correo y \
-luego usa agendar_cita.
+5. Usa consultar_disponibilidad y ofrece solo los horarios de "proponer". Si el cliente pide otra hora, \
+revisa si está en "horarios_libres".
+6. {PASO_AGENDAR}
 7. Confirma con el número de cita, el mecánico asignado y cuándo llegará el recordatorio.
 
 Reglas:

@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 import boto3
 import pytest
 
-from taller import herramientas, store, vision
+from taller import config, herramientas, store, vision
 
 AHORA = datetime(2026, 9, 21, 8, 0, tzinfo=ZoneInfo("America/Mexico_City"))
 FOTO = "a" * 32 + ".jpg"
@@ -62,6 +62,7 @@ def test_flujo_completo(aws, clasificacion):
 
     disp, _ = run(ctx, "consultar_disponibilidad", fecha="2026-09-21")
     assert "10:00" in disp["horarios_libres"] and "09:00" not in disp["horarios_libres"]
+    assert disp["proponer"] == ["10:00", "14:00", "17:00"]
 
     _, err = agendar(ctx, confirmado=False)
     assert err, "no debe agendar sin confirmación del horario"
@@ -74,6 +75,19 @@ def test_flujo_completo(aws, clasificacion):
 
     mis, _ = run(ctx, "mis_citas")
     assert [c["cita_id"] for c in mis["citas"]] == [cita["cita_id"]]
+    assert mis["citas"][0]["dia"] == "lunes 21 de septiembre"
+
+
+def test_sin_ses_no_guarda_el_correo_y_avisa_al_agente(aws, clasificacion, monkeypatch):
+    monkeypatch.setattr(config, "SENDER_EMAIL", "")
+    ctx = nuevo_ctx()
+    preparar_vehiculo(ctx)
+    cita, err = run(ctx, "agendar_cita", fecha="2026-09-21", hora="10:00", servicio="frenos", descripcion="",
+                    email="ana@ejemplo.com", horario_confirmado_por_cliente=True)
+    assert not err and cita["correo"].startswith("no se enviará")
+    assert store.obtener_cita(cita["cita_id"])["email"] == ""
+    email = next(t for t in herramientas._catalogo() if t["name"] == "agendar_cita")["input_schema"]["properties"]["email"]
+    assert "no envía correos" in email["description"]
 
 
 def test_sin_foto_el_cliente_dice_marca_y_modelo(aws):

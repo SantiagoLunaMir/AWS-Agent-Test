@@ -136,3 +136,9 @@ def test_recorte_de_historial_no_separa_tool_result():
 def test_historial_con_formato_anterior_se_descarta():
     viejo = [{"role": "user", "content": [{"type": "text", "text": "hola"}]}]
     assert agente.recortar_historial(viejo) == []
+
+
+def test_sin_ses_el_prompt_no_ofrece_correo():
+    assert not config.SENDER_EMAIL
+    assert "No ofrezcas ni pidas correo" in agente.SISTEMA
+    assert "confirmación por correo" not in agente.SISTEMA

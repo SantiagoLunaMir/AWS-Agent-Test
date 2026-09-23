@@ -62,3 +62,15 @@ def test_cuando_legible():
     assert agenda.cuando_legible(LUNES_8AM + timedelta(minutes=2), LUNES_8AM) == "en unos 2 minutos"
     assert agenda.cuando_legible(datetime(2026, 9, 22, 9, 0, tzinfo=TZ), LUNES_8AM) == \
         "el martes 22 de septiembre a las 09:00"
+
+
+def test_fecha_legible():
+    assert agenda.fecha_legible("2026-09-28") == "lunes 28 de septiembre"
+    assert agenda.fecha_legible(date(2026, 10, 3)) == "sábado 3 de octubre"
+
+
+def test_horarios_sugeridos_reparte_el_dia():
+    dia = agenda.slots_del_dia(date(2026, 9, 28))
+    assert agenda.horarios_sugeridos(dia) == ["09:00", "13:00", "17:00"]
+    assert agenda.horarios_sugeridos(["10:00", "11:00"]) == ["10:00", "11:00"]
+    assert agenda.horarios_sugeridos(["09:00", "10:00", "11:00", "12:00"]) == ["09:00", "11:00", "12:00"]

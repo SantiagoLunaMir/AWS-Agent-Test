@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 import boto3
 from botocore.exceptions import ClientError
 
-from . import config
+from . import agenda, config
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ def enviar_correo(destino: str | None, asunto: str, cuerpo: str) -> str:
 def texto_cita(cita: dict) -> str:
     return (
         f"Cita {cita['cita_id']}\n"
-        f"Fecha: {cita['fecha']} a las {cita['hora']}\n"
+        f"Fecha: {agenda.fecha_legible(cita['fecha'])} a las {cita['hora']}\n"
         f"Vehículo: {cita['marca']} {cita['modelo']}\n"
         f"Servicio: {cita['servicio']}\n"
         f"Mecánico asignado: {cita['mecanico_nombre']}\n"

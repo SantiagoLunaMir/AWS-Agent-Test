@@ -19,6 +19,13 @@ MAX_BYTES_FOTO = 5 * 1024 * 1024
 RE_FOTO_ID = re.compile(r"^[0-9a-f]{32}\.(jpg|png|webp)$")
 RE_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MEDIA_TYPES = {"jpg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
+# Lo que notificaciones.enviar_correo devolvió, en palabras que el modelo no pueda leer como "sí se envió".
+ESTADO_CORREO = {
+    "enviado": "enviado",
+    "sin_correo": "no se pidió",
+    "correo_no_configurado": "no se enviará: el taller no envía correos. Si el cliente dio uno, díselo",
+    "no_enviado": "no se pudo enviar. Díselo al cliente",
+}
 
 
 class ErrorHerramienta(Exception):
@@ -54,18 +61,21 @@ def _catalogo() -> list[dict]:
         },
         {
             "name": "confirmar_vehiculo",
-            "description": "Registra la marca y el modelo del vehículo tal como el cliente los dio o los confirmó. "
+            "description": "Registra la marca y el modelo del vehículo que el cliente dio o confirmó. "
                            "Si el cliente los escribió él mismo, úsala directo. Si vienen de identificar_vehiculo, "
                            "úsala solo después de que el cliente confirme o corrija.",
             "input_schema": _obj({
-                "marca": {"type": "string"},
-                "modelo": {"type": "string"},
+                "marca": {"type": "string", "description": "Nombre oficial de la marca, con la ortografía correcta "
+                                                           "aunque el cliente la escriba mal (\"buggati\" -> \"Bugatti\")."},
+                "modelo": {"type": "string", "description": "Modelo con su escritura oficial, y el año si el cliente "
+                                                            "lo dio (\"veyron, 2018\" -> \"Veyron 2018\")."},
                 "confirmado_por_cliente": {"type": "boolean"},
             }),
         },
         {
             "name": "consultar_disponibilidad",
-            "description": "Devuelve los horarios libres de un día (formato AAAA-MM-DD).",
+            "description": "Devuelve los horarios libres de un día (formato AAAA-MM-DD). Ofrece al cliente solo los "
+                           "de 'proponer'; usa 'horarios_libres' si pide otra hora.",
             "input_schema": _obj({"fecha": {"type": "string"}}),
         },
         {
@@ -77,7 +87,8 @@ def _catalogo() -> list[dict]:
                 "hora": {"type": "string", "description": "HH:00"},
                 "servicio": {"type": "string", "enum": agenda.SERVICIOS},
                 "descripcion": {"type": "string", "description": "Síntoma o detalle en una frase."},
-                "email": {"type": "string", "description": "Correo para la confirmación, o cadena vacía."},
+                "email": {"type": "string", "description": "Correo para la confirmación, o cadena vacía."
+                          if config.SENDER_EMAIL else "Siempre cadena vacía: el taller no envía correos."},
                 "horario_confirmado_por_cliente": {"type": "boolean"},
             }),
         },
@@ -174,7 +185,8 @@ def confirmar_vehiculo(ctx: Contexto, marca: str, modelo: str, confirmado_por_cl
 def consultar_disponibilidad(ctx: Contexto, fecha: str) -> dict:
     dia = agenda.parsear_fecha(fecha, ctx.ahora)
     libres = agenda.horarios_libres(dia, store.citas_por_fecha(dia.isoformat()), ctx.ahora)
-    return {"fecha": dia.isoformat(), "dia_semana": agenda.DIAS[dia.weekday()], "horarios_libres": libres}
+    return {"fecha": dia.isoformat(), "dia_semana": agenda.DIAS[dia.weekday()],
+            "proponer": agenda.horarios_sugeridos(libres), "horarios_libres": libres}
 
 
 def agendar_cita(ctx: Contexto, fecha: str, hora: str, servicio: str, descripcion: str, email: str,
@@ -214,7 +226,7 @@ def agendar_cita(ctx: Contexto, fecha: str, hora: str, servicio: str, descripcio
         "session_id": ctx.session_id,
         "nombre": cliente.get("nombre", ""),
         "telefono": cliente["telefono"],
-        "email": email,
+        "email": email if config.SENDER_EMAIL else "",  # sin SES no se envía nada: no guardes el correo
         "marca": vehiculo["marca"],
         "modelo": vehiculo["modelo"],
         "tipo": vehiculo.get("tipo", "otro"),
@@ -248,12 +260,13 @@ def agendar_cita(ctx: Contexto, fecha: str, hora: str, servicio: str, descripcio
         recordatorio = f"{agenda.cuando_legible(momento, ctx.ahora)}, como mensaje en este chat"
     return {"ok": True, "cita_id": cita_id, "fecha": cita["fecha"], "dia_semana": agenda.DIAS[dia.weekday()],
             "hora": hora, "mecanico": mecanico["nombre"], "servicio": servicio, "recordatorio": recordatorio,
-            "correo": correo}
+            "correo": ESTADO_CORREO[correo]}
 
 
 def mis_citas(ctx: Contexto) -> dict:
     citas = store.citas_por_telefono(ctx.cliente["telefono"], ctx.ahora.date().isoformat())
-    return {"citas": [{k: c[k] for k in ("cita_id", "fecha", "hora", "marca", "modelo", "servicio", "mecanico_nombre")}
+    campos = ("cita_id", "fecha", "hora", "marca", "modelo", "servicio", "mecanico_nombre")
+    return {"citas": [{**{k: c[k] for k in campos}, "dia": agenda.fecha_legible(c["fecha"])}
                       for c in sorted(citas, key=lambda c: (c["fecha"], c["hora"])) if c.get("estado") == "confirmada"]}
 
 

@@ -5,7 +5,7 @@ Demo del taller práctico de la charla **"IA Generativa en 2026"** para AWS User
 Un cliente escribe en un chat **con estilo de app de mensajería** y un agente de IA:
 
 1. Obtiene la marca y el modelo del auto. Si el cliente no está seguro, puede mandar una **foto (opcional)**: el agente la identifica con visión y **le pide confirmación**.
-2. Averigua qué servicio necesita y propone horarios reales.
+2. Averigua qué servicio necesita y propone hasta 3 horarios reales, repartidos en el día.
 3. Agenda la cita cuando el cliente acepta y **asigna un mecánico** según la especialidad y la carga de trabajo.
 4. La cita aparece en el **panel del taller** en tiempo real.
 5. Confirma en el chat (y por correo, si se configura) y programa un **recordatorio** automático.
@@ -137,7 +137,7 @@ Al terminar, CDK imprime:
 | `visionModelId` | igual que `modelId` | Modelo que clasifica la foto. Debe aceptar imágenes |
 | `razonamiento` | `low` | Razonamiento extendido de Nova 2: `low`, `medium`, `high`, o vacío para apagarlo |
 | `modoRecordatorio` | `demo` | `demo` envía el recordatorio 2 minutos después de agendar; `real`, 24 h antes de la cita |
-| `senderEmail` | *(vacío)* | Remitente verificado en SES para enviar correos. En el sandbox de SES el destinatario también debe estar verificado |
+| `senderEmail` | *(vacío)* | Remitente verificado en SES para enviar correos. Si está vacío, el agente no ofrece ni pide correo y no lo guarda. En el sandbox de SES el destinatario también debe estar verificado |
 
 Ejemplo: `npx aws-cdk deploy -c modelId=openai.gpt-oss-120b-1:0 -c visionModelId=us.amazon.nova-2-lite-v1:0`
 
